@@ -4,7 +4,7 @@
 
 import { readSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readCatalog } from '../lib/catalog.mjs';
+import { isCatalogTokenSource, readCatalog } from '../lib/catalog.mjs';
 import { isExemptFile, scan } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
 import { renderToken, replaceAt } from '../lib/render.mjs';
@@ -35,9 +35,11 @@ const root = findTokenRoot(targetFile) || findRepoRoot(targetFile) || process.cw
 const config = readConfig(targetFile);
 if (config.disabled) passthrough('plugin disabled in config');
 
-// Block direct edits to tokens.json from the agent BEFORE the exempt-file check
-// (which would otherwise pass-through tokens.json as a "non-violation surface").
-if (isTokenSourceFile(targetFile, root)) {
+// Block direct edits to ANY discovered token source (DTCG JSON, CSS root vars, etc.)
+// BEFORE the exempt-file check (which would otherwise pass-through tokens.json as a
+// "non-violation surface"). The catalog is the source of truth for what counts.
+const catalog = readCatalog(root);
+if (isCatalogTokenSource(targetFile, catalog)) {
   if (config.mode !== 'maintainer') {
     emit(denyTokenSourceEdit(targetFile));
   } else {
@@ -47,7 +49,6 @@ if (isTokenSourceFile(targetFile, root)) {
 
 if (isExemptFile(targetFile)) passthrough('exempt file');
 
-const catalog = readCatalog(root);
 if (!catalog || Object.keys(catalog.tokens).length === 0) {
   emit(denyNoCatalog());
 }
@@ -64,7 +65,7 @@ for (let i = 0; i < candidates.length; i++) {
   for (const v of violations) {
     const result = suggest(v, catalog);
     const replacement = result.primary
-      ? renderToken(result.primary.tokenName, v.surface, profile)
+      ? renderToken(result.primary.tokenName, v.surface, profile, v)
       : null;
     allReports.push({
       candidateIdx: i,
@@ -241,14 +242,6 @@ function applyRewritesPerCandidate(input, tool, candidates, rewrites) {
     return { ...input, edits: nextEdits };
   }
   return input;
-}
-
-function isTokenSourceFile(file, root) {
-  if (!root) return false;
-  const norm = file.replace(/\\/g, '/');
-  if (norm.endsWith('/tokens.json')) return true;
-  if (norm.endsWith('/design-tokens.json')) return true;
-  return false;
 }
 
 function denyTokenSourceEdit(file) {

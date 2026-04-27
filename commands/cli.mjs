@@ -171,19 +171,29 @@ async function cmdAudit(rest) {
 
   const baseline = flags.baseline ?? defaultBaseline();
   const useChangedLines = flags.changedOnly !== false && !flags.fullRepo;
-  // changedLineMap: file → Set<lineNumber> of lines added/modified vs baseline (covers
-  // committed and working-tree edits). Empty map = full-repo scan.
   const changedLineMap = useChangedLines ? changedLineRanges(root, baseline) : null;
   const files = useChangedLines
     ? [...changedLineMap.keys()].map((p) => join(root, p))
     : walkAllFiles(root);
 
-  /** @type {Array<{file: string, violation: any, primary: any|null, replacement: string|null}>} */
+  const suppressions = readSuppressionsFile(flags.suppressions, root);
+
+  /**
+   * @typedef {object} Finding
+   * @property {string} file
+   * @property {any} violation
+   * @property {any|null} primary
+   * @property {string|null} replacement
+   * @property {boolean} preExisting
+   * @property {string[]} labels
+   */
+  /** @type {Finding[]} */
   const findings = [];
   let totalScanned = 0;
   for (const file of files) {
     if (isExemptFile(file)) continue;
     if (!classifySurface(file)) continue;
+    if (suppressions.matches(file)) continue;
     totalScanned++;
     let content;
     try { content = readFileSync(file, 'utf8'); }
@@ -191,33 +201,190 @@ async function cmdAudit(rest) {
     const violations = scan(content, file, { tailwindDetected });
     const changedLines = useChangedLines ? changedLineMap.get(relative(root, file)) : null;
     for (const v of violations) {
-      // Changed-only mode: filter findings to lines actually touched in the diff.
-      if (changedLines && !changedLines.has(v.line)) continue;
+      const isChanged = !useChangedLines || (changedLines && changedLines.has(v.line));
+      if (!isChanged && !flags.allowExisting) continue;
+      if (!isChanged) continue;          // never include unchanged findings in changed-only mode
       const result = suggest(v, cat);
-      const replacement = result.primary ? renderToken(result.primary.tokenName, v.surface, profile) : null;
-      findings.push({ file: relative(root, file), violation: v, primary: result.primary, replacement });
+      const replacement = result.primary ? renderToken(result.primary.tokenName, v.surface, profile, v) : null;
+      findings.push({
+        file: relative(root, file),
+        violation: v,
+        primary: result.primary,
+        replacement,
+        preExisting: useChangedLines ? false : true,
+        labels: ['semantics-unchecked', 'deprecation-unchecked'],
+      });
     }
   }
 
+  // Deprecation usage scan (v0.1: name-match only — no AST resolution).
+  const deprecatedFindings = flags.failOnDeprecated ? scanDeprecatedUsage(files, cat, root, suppressions) : [];
+
+  // Coverage metric (trend only; never a gate).
+  const coverage = computeCoverage(files, suppressions);
+
   if (flags.json) {
     process.stdout.write(JSON.stringify({
-      mode: flags.changedOnly && !flags.fullRepo ? 'changed-only' : 'full-repo',
-      baseline: flags.baseline ?? defaultBaseline(),
+      mode: useChangedLines ? 'changed-only' : 'full-repo',
+      baseline,
       filesScanned: totalScanned,
       findings,
-      labels: ['semantics-unchecked', 'deprecation-unchecked'],
+      deprecatedUsage: deprecatedFindings,
+      coverage,
       coverageDisclaimer: 'Token coverage measures literal-replacement only. Tokens may be semantically wrong or deprecated; see tokenize__deprecate to manage lifecycle.',
     }, null, 2) + '\n');
+  } else if (flags.markdown) {
+    emitMarkdown({ findings, deprecatedFindings, coverage, totalScanned, useChangedLines, baseline });
   } else {
-    log(`Scanned ${totalScanned} files (${flags.fullRepo ? 'full-repo' : 'changed-only vs ' + (flags.baseline ?? defaultBaseline())}).`);
+    log(`Scanned ${totalScanned} files (${useChangedLines ? 'changed-only vs ' + baseline : 'full-repo'}).`);
     log(`Found ${findings.length} hardcoded value(s).`);
+    log(`Coverage: ${(coverage.ratio * 100).toFixed(1)}%  (${coverage.tokenized}/${coverage.total} declarations)`);
     log('NOTE: results are tagged semantics-unchecked, deprecation-unchecked. Tokenized ≠ semantically correct.');
     log('');
     for (const f of findings) {
       log(`  ${f.file}:${f.violation.line}  ${f.violation.literal}  →  ${f.replacement ?? '(no match — try tokenize__propose)'}`);
     }
+    if (deprecatedFindings.length > 0) {
+      log('');
+      log(`Deprecated-token usage (${deprecatedFindings.length}):`);
+      for (const d of deprecatedFindings) {
+        log(`  ${d.file}:${d.line}  ${d.token}  ${d.replacement ? `(use ${d.replacement})` : ''}`);
+      }
+    }
   }
-  if (findings.length > 0) process.exit(1);
+  // Exit code: gate on findings unless --allow-existing AND we're full-repo (then only
+  // changed-line findings would gate, but in full-repo we have none flagged "changed").
+  // Plus optional fail-on-deprecated.
+  let shouldFail = findings.length > 0;
+  if (flags.allowExisting && !useChangedLines) shouldFail = false;
+  if (flags.failOnDeprecated && deprecatedFindings.length > 0) shouldFail = true;
+  if (shouldFail) process.exit(1);
+}
+
+function readSuppressionsFile(path, root) {
+  if (!path) return { matches: () => false };
+  const abs = resolve(root, path);
+  if (!existsSync(abs)) return { matches: () => false };
+  let lines;
+  try { lines = readFileSync(abs, 'utf8').split(/\r?\n/); }
+  catch { return { matches: () => false }; }
+  const patterns = lines
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'))
+    .map((p) => new RegExp(globToRegexCli(p)));
+  return {
+    matches(file) {
+      const rel = relative(root, file).replace(/\\/g, '/');
+      return patterns.some((re) => re.test(rel));
+    },
+  };
+}
+
+function globToRegexCli(pattern) {
+  // Local minimal glob → regex (mirror of lib/ignore.mjs behavior, kept inline to avoid
+  // an extra import and to keep the audit CLI dependency-free).
+  let p = pattern;
+  let rooted = false;
+  if (p.startsWith('/')) { rooted = true; p = p.slice(1); }
+  let r = p.replace(/[.+^${}()|\\]/g, '\\$&');
+  r = r.replace(/\*\*/g, '\x00');
+  r = r.replace(/\*/g, '[^/]*');
+  r = r.replace(/\?/g, '[^/]');
+  r = r.replaceAll('\x00', '.*');
+  return (rooted ? '^' : '^(?:.*/)?') + r + '(?:/.*)?$';
+}
+
+function scanDeprecatedUsage(files, cat, root, suppressions) {
+  const deprecated = Object.values(cat.tokens || {}).filter((t) => t.deprecated);
+  if (deprecated.length === 0) return [];
+  /** @type {Array<{file: string, line: number, token: string, replacement?: string}>} */
+  const out = [];
+  for (const file of files) {
+    if (isExemptFile(file)) continue;
+    if (!classifySurface(file)) continue;
+    if (suppressions.matches(file)) continue;
+    let content;
+    try { content = readFileSync(file, 'utf8'); }
+    catch { continue; }
+    const lines = content.split(/\r?\n/);
+    for (const tok of deprecated) {
+      const cssName = '--' + tok.name.replace(/\./g, '-');
+      const dotName = tok.name;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(cssName) || lines[i].includes(dotName)) {
+          out.push({
+            file: relative(root, file),
+            line: i + 1,
+            token: tok.name,
+            replacement: extractReplacementHint(tok.description),
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function extractReplacementHint(desc) {
+  if (!desc) return undefined;
+  const m = /use\s+([a-z][a-z0-9.-]+)/i.exec(desc);
+  return m ? m[1] : undefined;
+}
+
+/**
+ * Trend coverage metric: count CSS-style declarations using tokens vs literals.
+ * Indicative only; the disclaimer in the audit output makes this clear.
+ */
+function computeCoverage(files, suppressions) {
+  const declRe = /(?:color|background(?:-color)?|fill|stroke|padding(?:-\w+)?|margin(?:-\w+)?|gap|border-radius|font-size|width|height)\s*:\s*([^;]+);/g;
+  let total = 0, tokenized = 0;
+  for (const file of files) {
+    if (isExemptFile(file)) continue;
+    if (!classifySurface(file)) continue;
+    if (suppressions.matches(file)) continue;
+    let content;
+    try { content = readFileSync(file, 'utf8'); }
+    catch { continue; }
+    let m;
+    declRe.lastIndex = 0;
+    while ((m = declRe.exec(content))) {
+      const value = m[1].trim();
+      total++;
+      if (/var\(--|tokens\.|theme\.|vars\.|^\$[a-z]/.test(value)) tokenized++;
+    }
+  }
+  return { total, tokenized, ratio: total ? tokenized / total : 1 };
+}
+
+function emitMarkdown(payload) {
+  const { findings, deprecatedFindings, coverage, totalScanned, useChangedLines, baseline } = payload;
+  log('# ui-tokenize audit');
+  log('');
+  log(`- Mode: ${useChangedLines ? 'changed-only' : 'full-repo'}${useChangedLines ? ` (vs \`${baseline}\`)` : ''}`);
+  log(`- Files scanned: ${totalScanned}`);
+  log(`- Findings: ${findings.length}`);
+  log(`- Coverage: ${(coverage.ratio * 100).toFixed(1)}% (${coverage.tokenized}/${coverage.total})`);
+  log(`- Labels: \`semantics-unchecked\`, \`deprecation-unchecked\` — tokenized ≠ semantically correct.`);
+  if (findings.length > 0) {
+    log('');
+    log('## Findings');
+    log('');
+    log('| File | Line | Type | Literal | Suggestion |');
+    log('|------|------|------|---------|------------|');
+    for (const f of findings) {
+      log(`| \`${f.file}\` | ${f.violation.line} | ${f.violation.type} | \`${f.violation.literal}\` | ${f.replacement ? `\`${f.replacement}\`` : '_(no match — `tokenize__propose`)_'} |`);
+    }
+  }
+  if (deprecatedFindings.length > 0) {
+    log('');
+    log('## Deprecated-token usage');
+    log('');
+    log('| File | Line | Token | Replacement |');
+    log('|------|------|-------|-------------|');
+    for (const d of deprecatedFindings) {
+      log(`| \`${d.file}\` | ${d.line} | \`${d.token}\` | ${d.replacement ? `\`${d.replacement}\`` : '_n/a_'} |`);
+    }
+  }
 }
 
 function defaultBaseline() {
@@ -319,7 +486,7 @@ async function cmdFix(rest) {
     );
     let next = content;
     for (const x of sorted) {
-      const replacement = renderToken(x.s.primary.tokenName, x.v.surface, profile);
+      const replacement = renderToken(x.s.primary.tokenName, x.v.surface, profile, x.v);
       next = replaceAt(next, x.v, replacement);
       replacementCount++;
     }
@@ -429,15 +596,30 @@ function nameFromIntent(intent, value) {
 // --------------------------------------------------------------------------------
 
 function parseFlags(rest) {
-  const flags = { json: false, fullRepo: false, changedOnly: true, baseline: null, fix: false };
+  const flags = {
+    json: false,
+    markdown: false,
+    fullRepo: false,
+    changedOnly: true,
+    baseline: null,
+    fix: false,
+    allowExisting: false,
+    suppressions: null,
+    failOnDeprecated: false,
+  };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === '--json') flags.json = true;
+    else if (a === '--markdown') flags.markdown = true;
     else if (a === '--full-repo') { flags.fullRepo = true; flags.changedOnly = false; }
     else if (a === '--changed-only') flags.changedOnly = true;
     else if (a === '--baseline') flags.baseline = rest[++i];
     else if (a.startsWith('--baseline=')) flags.baseline = a.split('=')[1];
     else if (a === '--fix') flags.fix = true;
+    else if (a === '--allow-existing') flags.allowExisting = true;
+    else if (a === '--suppressions') flags.suppressions = rest[++i];
+    else if (a.startsWith('--suppressions=')) flags.suppressions = a.split('=')[1];
+    else if (a === '--fail-on-deprecated') flags.failOnDeprecated = true;
   }
   return flags;
 }

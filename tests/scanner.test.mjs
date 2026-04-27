@@ -64,7 +64,30 @@ test('scan: tailwind arbitrary brackets only when detected', () => {
   // Tailwind brackets off: hex still flagged via HEX_RE and 17px via DIMENSION_RE.
   assert.ok(off.some((x) => x.literal === '#2563eb'));
   const on = scan('<div className="bg-[#2563eb] p-[17px]" />', '/x/A.tsx', { tailwindDetected: true });
-  assert.ok(on.some((x) => x.surface === 'tsx' && x.type === 'tailwind-arbitrary'));
+  // Surface is now `tailwind-arbitrary` and type is the inferred color/dimension
+  // (per the post-audit fix #7).
+  assert.ok(on.some((x) => x.surface === 'tailwind-arbitrary' && x.literal.startsWith('bg-[') && x.type === 'color'),
+    `expected tailwind-arbitrary color violation, got: ${JSON.stringify(on)}`);
+  assert.ok(on.some((x) => x.surface === 'tailwind-arbitrary' && x.literal.startsWith('p-[') && x.type === 'dimension'),
+    `expected tailwind-arbitrary dimension violation, got: ${JSON.stringify(on)}`);
+});
+
+test('scan: mixed token-def-and-violation line surfaces both correctly', () => {
+  // The token def span gets blanked; the consumer color is still flagged.
+  const v = scan(':root { --x: #fff; } .y { color: #abcdef; }', '/x/style.css');
+  assert.ok(v.some((x) => x.literal === '#abcdef'),
+    `expected to find #abcdef, got: ${JSON.stringify(v)}`);
+  assert.ok(!v.some((x) => x.literal === '#fff'),
+    `should NOT flag the token-def value #fff, got: ${JSON.stringify(v)}`);
+});
+
+test('scan: SVG sentinels (context-fill, etc.) are exempt', () => {
+  const a = scan('<svg><circle fill="context-fill" /></svg>', '/x/icon.svg');
+  assert.equal(a.length, 0);
+  const b = scan('<svg><circle fill="context-stroke" /></svg>', '/x/icon.svg');
+  assert.equal(b.length, 0);
+  const c = scan('<svg><circle fill="var(--color-primary)" /></svg>', '/x/icon.svg');
+  assert.equal(c.length, 0);
 });
 
 test('scan: SVG fill attr literal', () => {

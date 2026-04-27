@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// PostToolUse: re-scan written file; emit Catalog updated when token-source changed; report residuals.
+// PostToolUse: re-scan written file; emit Catalog updated when token-source changed;
+// run external linters (stylelint/eslint) if installed; report residuals.
 
 import { readSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { discoverCatalog, readCatalog, writeCatalog } from '../lib/catalog.mjs';
+import { extname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { discoverCatalog, isCatalogTokenSource, readCatalog, writeCatalog } from '../lib/catalog.mjs';
 import { isExemptFile, scan } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
 import { renderToken } from '../lib/render.mjs';
@@ -22,10 +24,11 @@ const targetFile = toolInput.file_path || toolInput.path;
 if (!targetFile) exitNoOutput();
 
 const root = findTokenRoot(targetFile) || findRepoRoot(targetFile) || process.cwd();
+const oldCat = readCatalog(root);
 
-// If a token-source file was edited, re-discover and emit delta.
-if (/\/(tokens|design-tokens)\.json$/.test(targetFile.replace(/\\/g, '/'))) {
-  const oldCat = readCatalog(root);
+// If ANY discovered token source was edited (DTCG json OR a CSS file with :root vars),
+// re-discover and emit catalog-update delta.
+if (isCatalogTokenSource(targetFile, oldCat)) {
   let newCat;
   try {
     newCat = discoverCatalog(root);
@@ -38,13 +41,17 @@ if (/\/(tokens|design-tokens)\.json$/.test(targetFile.replace(/\\/g, '/'))) {
   emit(catalogUpdatedMessage(delta));
 }
 
-// Otherwise re-scan to surface residuals (catches anything PreToolUse let through, e.g. on Edit context).
+// Otherwise re-scan to surface residuals (catches anything PreToolUse let through).
 if (isExemptFile(targetFile)) exitNoOutput();
+
+// Run external linters first (auto-fix only) if they're installed at the root.
+runExternalLinters(targetFile, root);
+
 let content;
 try { content = readFileSync(targetFile, 'utf8'); }
 catch { exitNoOutput(); }
 
-const catalog = readCatalog(root);
+const catalog = oldCat;
 if (!catalog) exitNoOutput();
 const profilePath = join(tokenizeDir(root), 'consumer-profile.json');
 const profile = existsSync(profilePath) ? JSON.parse(readFileSync(profilePath, 'utf8')) : undefined;
@@ -59,7 +66,7 @@ const reports = violations.map((v) => {
     violation: v,
     primary: result.primary,
     alternates: result.alternates,
-    renderedReplacement: result.primary ? renderToken(result.primary.tokenName, v.surface, profile) : null,
+    renderedReplacement: result.primary ? renderToken(result.primary.tokenName, v.surface, profile, v) : null,
   };
 });
 emit(postToolReport(reports));
@@ -94,4 +101,34 @@ function diffCatalogs(oldC, newC) {
   const added = [...newNames].filter((n) => !oldNames.has(n));
   const removed = [...oldNames].filter((n) => !newNames.has(n));
   return { added, removed, renamed: [] };
+}
+
+/**
+ * Auto-fix the touched file with Stylelint and/or ESLint when those tools are present
+ * under <root>/node_modules. Failures are silent — the linter is augmenting, not gating.
+ */
+function runExternalLinters(file, projectRoot) {
+  const ext = extname(file).toLowerCase();
+  if (['.css', '.scss', '.less', '.pcss'].includes(ext)) {
+    if (existsSync(join(projectRoot, 'node_modules', 'stylelint'))) {
+      try {
+        spawnSync('npx', ['--no-install', 'stylelint', '--fix', file], {
+          cwd: projectRoot,
+          stdio: 'ignore',
+          timeout: 5000,
+        });
+      } catch { /* non-fatal */ }
+    }
+  }
+  if (['.tsx', '.jsx', '.ts', '.js', '.mjs', '.cjs'].includes(ext)) {
+    if (existsSync(join(projectRoot, 'node_modules', 'eslint'))) {
+      try {
+        spawnSync('npx', ['--no-install', 'eslint', '--fix', file], {
+          cwd: projectRoot,
+          stdio: 'ignore',
+          timeout: 5000,
+        });
+      } catch { /* non-fatal */ }
+    }
+  }
 }

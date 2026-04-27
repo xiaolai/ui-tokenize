@@ -2,6 +2,7 @@
 // SessionStart hook: rebuild catalog, compact ledger, inject categorized token list.
 
 import { readSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { discoverCatalog, writeCatalog } from '../lib/catalog.mjs';
 import { discoverConsumerProfile } from '../lib/consumer-profile.mjs';
 import { compactLedger } from '../lib/ledger.mjs';
@@ -15,7 +16,9 @@ try { event = JSON.parse(stdinBuf); } catch { event = {}; }
 
 const cwd = event.cwd || process.cwd();
 const root = findTokenRoot(cwd) || findRepoRoot(cwd) || cwd;
-const sessionId = event.session_id || `sess_${Date.now()}`;
+// Ad-hoc session-id fallback gets PID + random entropy to avoid collisions when
+// multiple SessionStart hooks fire in the same millisecond.
+const sessionId = event.session_id || `sess_${Date.now()}_${process.pid}_${randomBytes(4).toString('hex')}`;
 
 let catalog, profile;
 try {
