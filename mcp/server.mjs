@@ -105,7 +105,11 @@ rl.on('line', (line) => {
 async function dispatch(req) {
   const handler = handlers[req.method];
   if (!handler) return errorResponse(req.id, -32601, `Method not found: ${req.method}`);
-  return handler(req);
+  try {
+    return handler(req);
+  } catch (err) {
+    return errorResponse(req.id, -32603, `Internal error: ${err.message}`);
+  }
 }
 
 function handleInitialize(req) {
@@ -133,13 +137,31 @@ function handleToolsList(req) {
 
 function handleToolsCall(req) {
   const { name, arguments: args = {} } = req.params || {};
+  /** @type {(args: object) => object} */
+  let impl;
   switch (name) {
-    case 'tokenize__list_tokens':   return ok(req.id, listTokens(args));
-    case 'tokenize__find_closest':  return ok(req.id, findClosest(args));
-    case 'tokenize__propose':       return ok(req.id, proposeToken(args));
-    case 'tokenize__add_token':     return ok(req.id, addToken(args));
-    case 'tokenize__deprecate':     return ok(req.id, deprecateToken(args));
+    case 'tokenize__list_tokens':   impl = listTokens; break;
+    case 'tokenize__find_closest':  impl = findClosest; break;
+    case 'tokenize__propose':       impl = proposeToken; break;
+    case 'tokenize__add_token':     impl = addToken; break;
+    case 'tokenize__deprecate':     impl = deprecateToken; break;
     default:                        return errorResponse(req.id, -32602, `Unknown tool: ${name}`);
+  }
+  // Tool execution failures are returned as CallToolResult with isError: true so the
+  // model can read the error text and self-correct (per MCP spec). JSON-RPC errors are
+  // reserved for protocol-level failures (unknown method, malformed request).
+  try {
+    const content = impl(args);
+    return { jsonrpc: '2.0', id: req.id, result: { content: [content] } };
+  } catch (err) {
+    return {
+      jsonrpc: '2.0',
+      id: req.id,
+      result: {
+        content: [{ type: 'text', text: `Error: ${err.message}` }],
+        isError: true,
+      },
+    };
   }
 }
 
@@ -229,10 +251,6 @@ function deprecateToken({ name, reason, replacement }) {
 // --------------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------------
-
-function ok(id, content) {
-  return { jsonrpc: '2.0', id, result: { content: [content] } };
-}
 
 function textContent(text) {
   return { type: 'text', text };

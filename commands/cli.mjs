@@ -169,11 +169,14 @@ async function cmdAudit(rest) {
   const profile = readConsumerProfileFile(root);
   const tailwindDetected = cat.sources?.some((s) => s.type === 'tailwind') || false;
 
-  const files = flags.fullRepo
-    ? walkAllFiles(root)
-    : flags.changedOnly !== false
-      ? changedFiles(root, flags.baseline ?? defaultBaseline())
-      : walkAllFiles(root);
+  const baseline = flags.baseline ?? defaultBaseline();
+  const useChangedLines = flags.changedOnly !== false && !flags.fullRepo;
+  // changedLineMap: file → Set<lineNumber> of lines added/modified vs baseline (covers
+  // committed and working-tree edits). Empty map = full-repo scan.
+  const changedLineMap = useChangedLines ? changedLineRanges(root, baseline) : null;
+  const files = useChangedLines
+    ? [...changedLineMap.keys()].map((p) => join(root, p))
+    : walkAllFiles(root);
 
   /** @type {Array<{file: string, violation: any, primary: any|null, replacement: string|null}>} */
   const findings = [];
@@ -186,7 +189,10 @@ async function cmdAudit(rest) {
     try { content = readFileSync(file, 'utf8'); }
     catch { continue; }
     const violations = scan(content, file, { tailwindDetected });
+    const changedLines = useChangedLines ? changedLineMap.get(relative(root, file)) : null;
     for (const v of violations) {
+      // Changed-only mode: filter findings to lines actually touched in the diff.
+      if (changedLines && !changedLines.has(v.line)) continue;
       const result = suggest(v, cat);
       const replacement = result.primary ? renderToken(result.primary.tokenName, v.surface, profile) : null;
       findings.push({ file: relative(root, file), violation: v, primary: result.primary, replacement });
@@ -222,14 +228,42 @@ function defaultBaseline() {
   return 'main';
 }
 
-function changedFiles(root, baseline) {
+/**
+ * Resolve a map of file → Set<line numbers> for lines added/modified vs baseline.
+ * Includes both committed differences AND working-tree changes (uncommitted edits).
+ *
+ * @param {string} root
+ * @param {string} baseline
+ * @returns {Map<string, Set<number>>}
+ */
+function changedLineRanges(root, baseline) {
+  /** @type {Map<string, Set<number>>} */
+  const out = new Map();
+  let diff;
   try {
-    const out = execSync(`git diff --name-only --diff-filter=ACMR ${baseline}...HEAD`, { cwd: root }).toString();
-    return out.split('\n').filter(Boolean).map((p) => join(root, p));
+    // `<baseline>` (no `...HEAD`) covers committed + working-tree changes.
+    diff = execSync(`git diff --unified=0 --no-color ${baseline} -- .`, { cwd: root, maxBuffer: 64 * 1024 * 1024 }).toString();
   } catch (err) {
     process.stderr.write(`[ui-tokenize] WARN: cannot diff against ${baseline}: ${err.message}\nFalling back to full-repo scan.\n`);
-    return walkAllFiles(root);
+    // Fall through with empty map — caller treats this as full-repo.
+    return new Map();
   }
+  let currentFile = null;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++ b/')) {
+      currentFile = line.slice('+++ b/'.length);
+      if (!out.has(currentFile)) out.set(currentFile, new Set());
+    } else if (line.startsWith('@@') && currentFile) {
+      // Hunk header: @@ -old,oldCount +new,newCount @@
+      const m = /\+(\d+)(?:,(\d+))?/.exec(line);
+      if (!m) continue;
+      const start = parseInt(m[1], 10);
+      const count = m[2] != null ? parseInt(m[2], 10) : 1;
+      const set = out.get(currentFile);
+      for (let i = 0; i < count; i++) set.add(start + i);
+    }
+  }
+  return out;
 }
 
 function walkAllFiles(root) {

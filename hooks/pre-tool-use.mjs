@@ -9,11 +9,14 @@ import { isExemptFile, scan } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
 import { renderToken, replaceAt } from '../lib/render.mjs';
 import { allowRewrite, denyWithSuggestions, hardStop } from '../lib/format.mjs';
-import { appendEvent, unresolvedBlocksFor } from '../lib/ledger.mjs';
+import { appendEvent, consecutiveDeniesFor } from '../lib/ledger.mjs';
 import { readConfig } from '../lib/config.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
 
-const HARD_STOP_THRESHOLD = 2;
+// D-019: deny-deny-deny → hard-stop. Three consecutive deny outcomes for the same file
+// in the current session before this PreToolUse triggers HARD_STOP. Resolved by any
+// successful tool call (rewrite or passthrough) on the same file.
+const HARD_STOP_THRESHOLD = 3;
 
 const stdinBuf = readAllStdin();
 let event;
@@ -52,10 +55,11 @@ if (!catalog || Object.keys(catalog.tokens).length === 0) {
 const profile = readConsumerProfile(root);
 const tailwindDetected = catalog?.sources?.some((s) => s.type === 'tailwind') || false;
 
-const candidateContents = collectEditedContents(toolInput, toolName, targetFile);
-/** @type {Array<import('../lib/format.mjs').ViolationReport>} */
+const candidates = collectEditedContents(toolInput, toolName);
+/** @type {Array<{candidateIdx: number, report: import('../lib/format.mjs').ViolationReport}>} */
 const allReports = [];
-for (const c of candidateContents) {
+for (let i = 0; i < candidates.length; i++) {
+  const c = candidates[i];
   const violations = scan(c.content, targetFile, { tailwindDetected });
   for (const v of violations) {
     const result = suggest(v, catalog);
@@ -63,47 +67,72 @@ for (const c of candidateContents) {
       ? renderToken(result.primary.tokenName, v.surface, profile)
       : null;
     allReports.push({
-      violation: v,
-      primary: result.primary,
-      alternates: result.alternates,
-      renderedReplacement: replacement,
+      candidateIdx: i,
+      report: {
+        violation: v,
+        primary: result.primary,
+        alternates: result.alternates,
+        renderedReplacement: replacement,
+      },
     });
   }
 }
 
-if (allReports.length === 0) passthrough('no violations');
+if (allReports.length === 0) {
+  // No violations — successful outcome resets the budget for this file/session.
+  appendEvent(targetFile, { kind: 'resolve', sessionId, file: targetFile });
+  passthrough('no violations');
+}
 
-// Partition into rewrites (confidence 1.0) and denies.
-const rewrites = allReports.filter((r) => r.primary && r.primary.confidence === 1.0 && r.renderedReplacement);
-const denies = allReports.filter((r) => !rewrites.includes(r));
+// Partition: confidence-1.0 with a rendered replacement = rewrite; everything else = deny.
+const rewrites = allReports.filter((x) =>
+  x.report.primary && x.report.primary.confidence === 1.0 && x.report.renderedReplacement,
+);
+const denies = allReports.filter((x) => !rewrites.includes(x));
 
 if (rewrites.length > 0 && denies.length === 0) {
-  // All exact matches: rewrite and allow.
-  const updatedInput = applyRewrites(toolInput, toolName, candidateContents, rewrites);
-  for (const r of rewrites) {
-    appendEvent(targetFile, { kind: 'rewrite', sessionId, file: targetFile, line: r.violation.line, literal: r.violation.literal, token: r.primary.tokenName });
+  // All exact matches → rewrite and allow.
+  const updatedInput = applyRewritesPerCandidate(toolInput, toolName, candidates, rewrites);
+  for (const x of rewrites) {
+    appendEvent(targetFile, {
+      kind: 'rewrite',
+      sessionId,
+      file: targetFile,
+      line: x.report.violation.line,
+      literal: x.report.violation.literal,
+      token: x.report.primary.tokenName,
+    });
   }
-  emit(allowRewrite(updatedInput, rewrites));
+  // A successful rewrite is also a budget-resetting outcome.
+  appendEvent(targetFile, { kind: 'resolve', sessionId, file: targetFile });
+  emit(allowRewrite(updatedInput, rewrites.map((x) => x.report)));
 }
 
-// Mixed or all-denies: surface the deny.
-const unresolved = unresolvedBlocksFor(targetFile, targetFile);
-if (unresolved >= HARD_STOP_THRESHOLD) {
-  emit(hardStop(`Two unresolved violations already exist for ${targetFile}; further edits to this file are blocked until they are addressed via tokenize__propose or manual fix.`));
+// Mixed or all-denies → check budget, emit deny.
+const denyCount = consecutiveDeniesFor(targetFile, targetFile, sessionId);
+if (denyCount >= HARD_STOP_THRESHOLD) {
+  emit(hardStop(`Three consecutive denied tool calls already exist for ${targetFile} in this session; further edits to this file are blocked until they are addressed via tokenize__propose or manual fix.`));
 }
 
-for (const r of denies) {
+// Per-violation block events for metrics; one deny event per (tool-call, file) for the budget.
+for (const x of denies) {
   appendEvent(targetFile, {
     kind: 'block',
     sessionId,
     file: targetFile,
-    line: r.violation.line,
-    literal: r.violation.literal,
-    reason: r.primary ? `low-confidence-${r.primary.tokenName}` : 'no-match',
+    line: x.report.violation.line,
+    literal: x.report.violation.literal,
+    reason: x.report.primary ? `low-confidence-${x.report.primary.tokenName}` : 'no-match',
   });
 }
+appendEvent(targetFile, {
+  kind: 'deny',
+  sessionId,
+  file: targetFile,
+  reason: `${denies.length} unresolved violation(s)`,
+});
 
-emit(denyWithSuggestions(denies, { retryAttempt: unresolved, mode: config.mode }));
+emit(denyWithSuggestions(denies.map((x) => x.report), { retryAttempt: denyCount, mode: config.mode }));
 
 // --------------------------------------------------------------------------------
 // Helpers
@@ -143,52 +172,75 @@ function resolveTargetFile(input) {
 
 /**
  * Collect the new content per logical region for scanning.
- * For Write: full content. For Edit: the new_string (with surrounding context if available).
- * For MultiEdit: each edit's new_string.
+ * For Write: full content (one candidate).
+ * For Edit: the new_string (one candidate).
+ * For MultiEdit: each edit's new_string (N candidates).
  *
- * @returns {Array<{content: string, replaceFn: (newContent: string) => any}>}
+ * @returns {Array<{content: string}>}
  */
-function collectEditedContents(input, tool, _file) {
+function collectEditedContents(input, tool) {
   if (tool === 'Write') {
-    return [{ content: String(input.content ?? ''), replaceFn: (c) => ({ ...input, content: c }) }];
+    return [{ content: String(input.content ?? '') }];
   }
   if (tool === 'Edit') {
-    const newStr = String(input.new_string ?? '');
-    return [{ content: newStr, replaceFn: (c) => ({ ...input, new_string: c }) }];
+    return [{ content: String(input.new_string ?? '') }];
   }
   if (tool === 'MultiEdit') {
     const edits = Array.isArray(input.edits) ? input.edits : [];
-    return edits.map((e, i) => ({
-      content: String(e.new_string ?? ''),
-      replaceFn: (c) => {
-        const next = edits.map((x, j) => (j === i ? { ...x, new_string: c } : x));
-        return { ...input, edits: next };
-      },
-    }));
+    return edits.map((e) => ({ content: String(e.new_string ?? '') }));
   }
   return [];
 }
 
-function applyRewrites(input, _tool, candidates, reports) {
-  // Group reports by candidate index (we know each violation came from a single candidate).
-  // For v0.1, we apply rewrites only to Write (full-content rewrites).
-  // For Edit / MultiEdit, the rewrite is applied to the new_string of the relevant edit.
-  let updated = input;
-  for (const candidate of candidates) {
-    const myReports = reports.filter((r) => candidates[reports.indexOf(r)] === candidate || candidates.length === 1);
-    if (myReports.length === 0) continue;
-    let content = candidate.content;
-    // Apply highest-line-number first to keep earlier offsets stable.
-    const sorted = [...myReports].sort((a, b) =>
-      (b.violation.line - a.violation.line) ||
-      (b.violation.column - a.violation.column),
+/**
+ * Apply rewrites to the original tool input by collecting per-candidate replacements
+ * and emitting a single accumulated updatedInput. Avoids the bug where rebuilding from
+ * input.edits inside a loop overwrites prior per-edit mutations.
+ *
+ * @param {object} input
+ * @param {string} tool
+ * @param {Array<{content: string}>} candidates
+ * @param {Array<{candidateIdx: number, report: import('../lib/format.mjs').ViolationReport}>} rewrites
+ * @returns {object}
+ */
+function applyRewritesPerCandidate(input, tool, candidates, rewrites) {
+  // Group rewrites by candidate index.
+  /** @type {Map<number, Array<{candidateIdx: number, report: import('../lib/format.mjs').ViolationReport}>>} */
+  const byIdx = new Map();
+  for (const r of rewrites) {
+    if (!byIdx.has(r.candidateIdx)) byIdx.set(r.candidateIdx, []);
+    byIdx.get(r.candidateIdx).push(r);
+  }
+  // For each candidate, apply its rewrites in descending line/column order to keep
+  // earlier offsets stable.
+  /** @type {Map<number, string>} */
+  const newContents = new Map();
+  for (const [idx, group] of byIdx) {
+    let content = candidates[idx].content;
+    const sorted = [...group].sort((a, b) =>
+      (b.report.violation.line - a.report.violation.line) ||
+      (b.report.violation.column - a.report.violation.column),
     );
     for (const r of sorted) {
-      content = replaceAt(content, r.violation, r.renderedReplacement);
+      content = replaceAt(content, r.report.violation, r.report.renderedReplacement);
     }
-    updated = candidate.replaceFn(content);
+    newContents.set(idx, content);
   }
-  return updated;
+  // Reconstruct the tool input atomically with all candidate updates applied.
+  if (tool === 'Write') {
+    return { ...input, content: newContents.get(0) ?? input.content };
+  }
+  if (tool === 'Edit') {
+    return { ...input, new_string: newContents.get(0) ?? input.new_string };
+  }
+  if (tool === 'MultiEdit') {
+    const edits = Array.isArray(input.edits) ? input.edits : [];
+    const nextEdits = edits.map((e, i) => (
+      newContents.has(i) ? { ...e, new_string: newContents.get(i) } : e
+    ));
+    return { ...input, edits: nextEdits };
+  }
+  return input;
 }
 
 function isTokenSourceFile(file, root) {

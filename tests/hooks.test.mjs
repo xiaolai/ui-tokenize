@@ -167,19 +167,20 @@ test('PreToolUse: passthrough when no violations', () => {
   }
 });
 
-test('PreToolUse: hard-stops after 2 unresolved blocks', () => {
+test('PreToolUse: hard-stops after 3 consecutive denied tool calls', () => {
   const root = setupProject();
   try {
     runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
     const file = join(root, 'src', 'e.css');
-    // Two consecutive deny-causing edits to same file
-    for (let i = 0; i < 2; i++) {
+    // Three consecutive deny-causing edits to same file in same session.
+    for (let i = 0; i < 3; i++) {
       runHook(PRE_TOOL_USE, {
         session_id: 's1',
         tool_name: 'Write',
-        tool_input: { file_path: file, content: `.x { color: #ff0${i}000; }` },  // garbage near-miss
+        tool_input: { file_path: file, content: `.x { color: #ff${i}000; }` },
       }, root);
     }
+    // 4th attempt → hard-stop.
     const r = runHook(PRE_TOOL_USE, {
       session_id: 's1',
       tool_name: 'Write',
@@ -187,7 +188,72 @@ test('PreToolUse: hard-stops after 2 unresolved blocks', () => {
     }, root);
     const out = JSON.parse(r.stdout);
     assert.equal(out.hookSpecificOutput?.permissionDecision, 'deny');
-    assert.ok(out.hookSpecificOutput?.permissionDecisionReason.includes('HARD-STOP'));
+    assert.ok(
+      out.hookSpecificOutput?.permissionDecisionReason.includes('HARD-STOP'),
+      `expected HARD-STOP, got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse: budget is per-session — old session denies do not affect new session', () => {
+  const root = setupProject();
+  try {
+    runHook(SESSION_START, { session_id: 's-old', cwd: root }, root);
+    const file = join(root, 'src', 'session-iso.css');
+    // 3 denies in old session → would normally hard-stop on 4th in old session.
+    for (let i = 0; i < 3; i++) {
+      runHook(PRE_TOOL_USE, {
+        session_id: 's-old',
+        tool_name: 'Write',
+        tool_input: { file_path: file, content: `.x { color: #ff${i}aaa; }` },
+      }, root);
+    }
+    // New session starts — budget should be fresh.
+    runHook(SESSION_START, { session_id: 's-new', cwd: root }, root);
+    const r = runHook(PRE_TOOL_USE, {
+      session_id: 's-new',
+      tool_name: 'Write',
+      tool_input: { file_path: file, content: `.x { color: #ff0000; }` },
+    }, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(
+      !out.hookSpecificOutput?.permissionDecisionReason.includes('HARD-STOP'),
+      'new session should not see old session\'s budget',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse: MultiEdit applies all edit rewrites correctly', () => {
+  const root = setupProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'MultiEdit',
+      tool_input: {
+        file_path: join(root, 'src', 'multi.css'),
+        edits: [
+          { old_string: 'A', new_string: '.a { color: #2563eb; }' },
+          { old_string: 'B', new_string: '.b { color: #b91c1c; }' },
+        ],
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow');
+    const updatedEdits = out.hookSpecificOutput?.updatedInput?.edits;
+    assert.ok(updatedEdits, 'updatedInput.edits should exist');
+    assert.equal(updatedEdits.length, 2);
+    assert.ok(updatedEdits[0].new_string.includes('var(--color-primary)'),
+      `first edit not rewritten: ${updatedEdits[0].new_string}`);
+    assert.ok(updatedEdits[1].new_string.includes('var(--color-danger)'),
+      `second edit not rewritten: ${updatedEdits[1].new_string}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
