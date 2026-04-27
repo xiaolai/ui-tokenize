@@ -1,0 +1,50 @@
+{
+  "$schema": "https://design-tokens.github.io/community-group/schemas/format/",
+  "color": {
+    "primary":            { "$value": "#6750a4", "$type": "color", "$description": "M3 primary" },
+    "on-primary":         { "$value": "#ffffff", "$type": "color" },
+    "primary-container":  { "$value": "#eaddff", "$type": "color" },
+    "on-primary-container": { "$value": "#21005d", "$type": "color" },
+    "secondary":          { "$value": "#625b71", "$type": "color" },
+    "on-secondary":       { "$value": "#ffffff", "$type": "color" },
+    "tertiary":           { "$value": "#7d5260", "$type": "color" },
+    "on-tertiary":        { "$value": "#ffffff", "$type": "color" },
+    "error":              { "$value": "#b3261e", "$type": "color" },
+    "on-error":           { "$value": "#ffffff", "$type": "color" },
+    "background":         { "$value": "#fffbfe", "$type": "color" },
+    "on-background":      { "$value": "#1c1b1f", "$type": "color" },
+    "surface":            { "$value": "#fffbfe", "$type": "color" },
+    "on-surface":         { "$value": "#1c1b1f", "$type": "color" },
+    "outline":            { "$value": "#79747e", "$type": "color" }
+  },
+  "radius": {
+    "none":  { "$value": "0px",   "$type": "dimension" },
+    "xs":    { "$value": "4px",   "$type": "dimension" },
+    "sm":    { "$value": "8px",   "$type": "dimension" },
+    "md":    { "$value": "12px",  "$type": "dimension" },
+    "lg":    { "$value": "16px",  "$type": "dimension" },
+    "xl":    { "$value": "28px",  "$type": "dimension" },
+    "full":  { "$value": "9999px","$type": "dimension" }
+  },
+  "space": {
+    "1":  { "$value": "4px",  "$type": "dimension" },
+    "2":  { "$value": "8px",  "$type": "dimension" },
+    "3":  { "$value": "12px", "$type": "dimension" },
+    "4":  { "$value": "16px", "$type": "dimension" },
+    "6":  { "$value": "24px", "$type": "dimension" },
+    "8":  { "$value": "32px", "$type": "dimension" }
+  },
+  "font-size": {
+    "label-small":   { "$value": "11px", "$type": "dimension" },
+    "label-medium":  { "$value": "12px", "$type": "dimension" },
+    "body-small":    { "$value": "12px", "$type": "dimension" },
+    "body-medium":   { "$value": "14px", "$type": "dimension" },
+    "body-large":    { "$value": "16px", "$type": "dimension" },
+    "title-small":   { "$value": "14px", "$type": "dimension" },
+    "title-medium":  { "$value": "16px", "$type": "dimension" },
+    "title-large":   { "$value": "22px", "$type": "dimension" },
+    "headline-small":  { "$value": "24px", "$type": "dimension" },
+    "headline-medium": { "$value": "28px", "$type": "dimension" },
+    "headline-large":  { "$value": "32px", "$type": "dimension" }
+  }
+}
