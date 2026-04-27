@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-plugin-marketplace.json",
+  "name": "ui-tokenize",
+  "owner": {
+    "name": "xiaolai"
+  },
+  "plugins": [
+    {
+      "name": "ui-tokenize",
+      "source": ".",
+      "description": "Block hardcoded UI values; enforce design tokens with rewrite-first hooks and a closed-loop control system",
+      "version": "0.1.0",
+      "author": {
+        "name": "xiaolai"
+      },
+      "license": "MIT",
+      "keywords": ["design-tokens", "ui", "css", "tailwind", "linting", "hooks", "mcp"],
+      "category": "developer-tools"
+    }
+  ]
+}

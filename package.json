@@ -1,0 +1,14 @@
+{
+  "name": "ui-tokenize",
+  "version": "0.1.0",
+  "description": "Block hardcoded UI values; enforce design tokens with rewrite-first hooks",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "license": "MIT",
+  "author": "xiaolai"
+}

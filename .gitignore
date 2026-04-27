@@ -1,0 +1,6 @@
+node_modules/
+.tokenize/
+*.log
+.DS_Store
+.idea/
+.vscode/
