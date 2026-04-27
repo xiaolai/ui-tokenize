@@ -20,7 +20,7 @@ const HARD_STOP_THRESHOLD = 3;
 
 const stdinBuf = readAllStdin();
 let event;
-try { event = JSON.parse(stdinBuf); } catch { passthrough('malformed event'); }
+try { event = JSON.parse(stdinBuf); } catch { failClosed('malformed hook event'); }
 
 const sessionId = event.session_id || 'unknown';
 const toolName = event.tool_name;
@@ -156,6 +156,20 @@ function readAllStdin() {
 function passthrough(reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: `[ui-tokenize] ${reason}` },
+  }));
+  process.exit(0);
+}
+
+// Fail closed: deny when we cannot make a security decision (e.g. corrupted or
+// attacker-influenced stdin). Allowing the call here is exactly the wrong default
+// for a quality/safety gate — the right move is to refuse and surface the cause.
+function failClosed(reason) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: `[ui-tokenize] ${reason}; refusing to make a security decision. Re-run the tool call with valid hook input or disable the plugin.`,
+    },
   }));
   process.exit(0);
 }

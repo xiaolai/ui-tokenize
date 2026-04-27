@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, rmSync, appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -107,6 +107,86 @@ test('audit reports coverage metric in default output', () => {
   try {
     const r = runCli(['audit', '--full-repo'], root);
     assert.ok(/Coverage:\s*[\d.]+%/.test(r.stdout), `should report coverage, got: ${r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Regression: audit --baseline must not invoke a shell, so an attacker who controls
+// the baseline string cannot run arbitrary commands. Defends finding #1 (Critical).
+test('audit --baseline rejects shell metacharacters', () => {
+  const root = setup();
+  try {
+    const sentinel = join(root, '.ui-tokenize-shell-injection-canary');
+    const malicious = `HEAD; touch ${sentinel}`;
+    const r = runCli(['audit', '--changed-only', '--baseline', malicious], root);
+    assert.ok(!existsSync(sentinel), `injection succeeded: sentinel file exists at ${sentinel}`);
+    // Allowlist rejects the ref before we even shell out, so stderr should mention rejection.
+    assert.ok(
+      r.stderr.includes('rejected unsafe baseline') || r.stderr.includes('cannot diff'),
+      `expected rejection warning, got stderr: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Regression: audit --baseline still works for legitimate refs after the security
+// fix — branch names, HEAD, HEAD~N, foo@{1}, commit shas — must not be rejected.
+test('audit --baseline accepts legitimate git refs', () => {
+  const root = setup();
+  try {
+    appendFileSync(join(root, 'a.css'), '\n.y { color: #abcdef; }');
+    const r = runCli(['audit', '--changed-only', '--baseline', 'HEAD'], root);
+    assert.ok(r.stdout.includes('#abcdef'), `expected #abcdef in output, got: ${r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Regression: --allow-existing in changed-only mode surfaces pre-existing findings
+// as informational without failing the gate. Defends finding #3 (High).
+test('audit --changed-only --allow-existing reports pre-existing without failing', () => {
+  const root = setup();
+  try {
+    // Add a NEW changed line that is *fixable* (matches a token exactly) — that way
+    // it does NOT contribute a violation to the gate, so only pre-existing remain.
+    // Easiest: just add a line that has no violations.
+    appendFileSync(join(root, 'a.css'), '\n.y { color: red; }');  // 'red' is not flagged
+    const r = runCli(['audit', '--changed-only', '--allow-existing', '--baseline', 'HEAD', '--json'], root);
+    assert.equal(r.status, 0, `should pass when only pre-existing findings, got stdout: ${r.stdout}, stderr: ${r.stderr}`);
+    const payload = JSON.parse(r.stdout);
+    const preExisting = payload.findings.filter((f) => f.preExisting);
+    assert.ok(preExisting.length >= 2, `expected pre-existing findings to be reported, got ${preExisting.length}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Regression: --allow-existing without changed-only (i.e. --full-repo) reports
+// every finding as pre-existing and exits 0. The flag is a "report but don't gate".
+test('audit --full-repo --allow-existing reports findings without failing', () => {
+  const root = setup();
+  try {
+    const r = runCli(['audit', '--full-repo', '--allow-existing', '--json'], root);
+    assert.equal(r.status, 0, `should pass with --allow-existing in full-repo, got status ${r.status}`);
+    const payload = JSON.parse(r.stdout);
+    assert.ok(payload.findings.length >= 2, `should still report findings, got ${payload.findings.length}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Regression: walkAllFiles must consult .gitignore / .tokenize/ignore via loadIgnore,
+// not the old hardcoded-folders list. Defends finding #7 (Medium).
+test('audit --full-repo respects .gitignore', () => {
+  const root = setup();
+  try {
+    mkdirSync(join(root, 'generated'), { recursive: true });
+    writeFileSync(join(root, 'generated', 'noisy.css'), '.z { color: #abcdef; }\n');
+    writeFileSync(join(root, '.gitignore'), 'generated/\n');
+    const r = runCli(['audit', '--full-repo'], root);
+    assert.ok(!r.stdout.includes('#abcdef'), `should NOT scan ignored generated/, got: ${r.stdout}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

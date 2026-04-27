@@ -4,7 +4,7 @@
 
 import { readSync, readFileSync, existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { discoverCatalog, isCatalogTokenSource, readCatalog, writeCatalog } from '../lib/catalog.mjs';
 import { isExemptFile, scan } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
@@ -106,29 +106,30 @@ function diffCatalogs(oldC, newC) {
 /**
  * Auto-fix the touched file with Stylelint and/or ESLint when those tools are present
  * under <root>/node_modules. Failures are silent — the linter is augmenting, not gating.
+ *
+ * Resolves binaries directly from `<root>/node_modules/.bin/` rather than going
+ * through `npx`. That removes PATH from the trust set (npx would happily pick up a
+ * shadowing `eslint` earlier in PATH) and avoids the network-aware npx fallback.
  */
 function runExternalLinters(file, projectRoot) {
   const ext = extname(file).toLowerCase();
   if (['.css', '.scss', '.less', '.pcss'].includes(ext)) {
-    if (existsSync(join(projectRoot, 'node_modules', 'stylelint'))) {
-      try {
-        spawnSync('npx', ['--no-install', 'stylelint', '--fix', file], {
-          cwd: projectRoot,
-          stdio: 'ignore',
-          timeout: 5000,
-        });
-      } catch { /* non-fatal */ }
-    }
+    runLintBin(projectRoot, 'stylelint', ['--fix', file]);
   }
   if (['.tsx', '.jsx', '.ts', '.js', '.mjs', '.cjs'].includes(ext)) {
-    if (existsSync(join(projectRoot, 'node_modules', 'eslint'))) {
-      try {
-        spawnSync('npx', ['--no-install', 'eslint', '--fix', file], {
-          cwd: projectRoot,
-          stdio: 'ignore',
-          timeout: 5000,
-        });
-      } catch { /* non-fatal */ }
-    }
+    runLintBin(projectRoot, 'eslint', ['--fix', file]);
   }
+}
+
+function runLintBin(projectRoot, binName, args) {
+  const isWin = process.platform === 'win32';
+  const binPath = join(projectRoot, 'node_modules', '.bin', isWin ? `${binName}.cmd` : binName);
+  if (!existsSync(binPath)) return;
+  try {
+    execFileSync(binPath, args, {
+      cwd: projectRoot,
+      stdio: 'ignore',
+      timeout: 5000,
+    });
+  } catch { /* non-fatal */ }
 }

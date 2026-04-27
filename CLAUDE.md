@@ -6,6 +6,36 @@ This plugin rewrites and blocks hardcoded UI values in your `Write`/`Edit`/`Mult
 2. **Denying** the call with a structured suggestion when the match is uncertain (you will see a tool-result-error containing nearest candidates and an instruction)
 3. **Allowing** the call when no UI literals are present
 
+## Prerequisites
+
+- Node.js ≥ 20 (the hooks and CLI are pure ESM `.mjs`, no build step).
+- A git repository at the project root (the audit's default `--changed-only` mode diffs against `origin/main` or `main`).
+- Zero runtime dependencies; no `npm install` is required for this plugin itself.
+
+## Install
+
+From the project where you want the plugin active:
+
+```bash
+claude plugin install ui-tokenize@xiaolai --scope project
+```
+
+Then in that project, bootstrap the catalog once:
+
+```bash
+/tokenize:init
+```
+
+## Verify
+
+After install, run the test suite from the plugin directory to confirm hooks and MCP tools are wired correctly:
+
+```bash
+npm test
+```
+
+Expected: `tests <N>   pass <N>   fail 0` (currently 113 / 113).
+
 ## What you should know
 
 - **Always prefer using existing tokens** over hardcoded values. Hex colors, `rgb()`, `hsl()`, raw pixel values, inline `style={{}}` numerics — all of these will trigger the plugin.
@@ -41,4 +71,4 @@ When the PreToolUse hook denies your call:
 
 ## Audit awareness
 
-`/tokenize:audit` reports tagged with `semantics-unchecked` and `deprecation-unchecked` mean the audit only verified that literal-replacement happened — it did not verify that the *right* token was used. A token may be syntactically present but semantically wrong (e.g. `color.text.danger` used for an info banner). Treat audit reports as necessary, not sufficient.
+`/tokenize:audit` reports tagged with `semantics-unchecked` and `deprecation-unchecked` mean the audit only verified that literal-replacement happened — it did not verify that the *right* token was used. A token may be syntactically present but semantically wrong (e.g. `color.text.danger` used for an info banner). A passing audit proves no hardcoded literals remain on changed lines; it does not prove the chosen tokens are semantically correct. Use the `token-reviewer` subagent (v0.2+) or a human reviewer for that.

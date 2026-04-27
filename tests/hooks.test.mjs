@@ -228,6 +228,31 @@ test('PreToolUse: budget is per-session — old session denies do not affect new
   }
 });
 
+// Regression: when stdin is not valid JSON, the hook must fail CLOSED (deny) rather
+// than passthrough-allow. A corrupted or attacker-influenced event is exactly the
+// case where a security gate must refuse to make a decision. Defends finding #4.
+test('PreToolUse: malformed event JSON denies (fails closed)', () => {
+  const root = setupProject();
+  try {
+    const r = spawnSync('node', [PRE_TOOL_USE], {
+      input: 'this is not json',
+      cwd: root,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT },
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    assert.equal(r.status, 0, `hook should exit 0 with structured deny, got: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(
+      out.hookSpecificOutput?.permissionDecisionReason.includes('malformed'),
+      `expected malformed-event reason, got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('PreToolUse: MultiEdit applies all edit rewrites correctly', () => {
   const root = setupProject();
   try {

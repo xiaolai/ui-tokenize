@@ -1,19 +1,29 @@
 #!/usr/bin/env node
 // Unified CLI used by slash commands and the optional `npx ui-tokenize <subcommand>` entry.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { discoverCatalog, readCatalog, writeCatalog } from '../lib/catalog.mjs';
 import { isExemptFile, scan, classifySurface } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
 import { renderToken, replaceAt } from '../lib/render.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
 import { compactLedger, readSession } from '../lib/ledger.mjs';
+import { loadIgnore, globToRegExpStr } from '../lib/ignore.mjs';
+import { camelizeFromIntent, nameFromIntent } from '../lib/proposal.mjs';
+import { atomicWriteJson, readJsonStrict } from '../lib/json-io.mjs';
+import { readConfig } from '../lib/config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
+
+// Defense-in-depth allowlist for `--baseline` (and any other ref we pass to git).
+// execFileSync already avoids /bin/sh, but rejecting suspicious refs early gives a
+// crisp error instead of a confusing git failure. Allows: branch/tag names,
+// remote-tracking refs, commit shas, HEAD~N, foo@{1}.
+const GIT_REF_RE = /^[A-Za-z0-9._/@~^{}\-]+$/;
 
 const args = process.argv.slice(2);
 const subcommand = args[0];
@@ -201,9 +211,15 @@ async function cmdAudit(rest) {
     const violations = scan(content, file, { tailwindDetected });
     const changedLines = useChangedLines ? changedLineMap.get(relative(root, file)) : null;
     for (const v of violations) {
-      const isChanged = !useChangedLines || (changedLines && changedLines.has(v.line));
-      if (!isChanged && !flags.allowExisting) continue;
-      if (!isChanged) continue;          // never include unchanged findings in changed-only mode
+      // "isChanged" only makes sense relative to a baseline. In --full-repo mode
+      // there is no baseline, so every finding is treated as pre-existing — the
+      // run is a snapshot, not a diff.
+      const isChanged = useChangedLines && !!(changedLines && changedLines.has(v.line));
+      // In --changed-only mode, --allow-existing surfaces pre-existing findings as
+      // *informational* (preExisting: true) without failing the gate. Without the
+      // flag, pre-existing findings are skipped entirely so the report stays focused
+      // on what the current change introduced.
+      if (useChangedLines && !isChanged && !flags.allowExisting) continue;
       const result = suggest(v, cat);
       const replacement = result.primary ? renderToken(result.primary.tokenName, v.surface, profile, v) : null;
       findings.push({
@@ -211,7 +227,7 @@ async function cmdAudit(rest) {
         violation: v,
         primary: result.primary,
         replacement,
-        preExisting: useChangedLines ? false : true,
+        preExisting: !isChanged,
         labels: ['semantics-unchecked', 'deprecation-unchecked'],
       });
     }
@@ -252,11 +268,17 @@ async function cmdAudit(rest) {
       }
     }
   }
-  // Exit code: gate on findings unless --allow-existing AND we're full-repo (then only
-  // changed-line findings would gate, but in full-repo we have none flagged "changed").
-  // Plus optional fail-on-deprecated.
-  let shouldFail = findings.length > 0;
-  if (flags.allowExisting && !useChangedLines) shouldFail = false;
+  // Exit code:
+  //   - Without --allow-existing: any finding fails.
+  //   - With --allow-existing: only newly-changed findings fail (pre-existing are
+  //     reported but ignored for gating). In --changed-only mode, "newly changed"
+  //     is what we already filtered to; in --full-repo mode, every finding is
+  //     pre-existing by construction, so nothing fails.
+  //   - --fail-on-deprecated always escalates deprecated-token usage to a failure.
+  const gatingFindings = flags.allowExisting
+    ? findings.filter((f) => !f.preExisting)
+    : findings;
+  let shouldFail = gatingFindings.length > 0;
   if (flags.failOnDeprecated && deprecatedFindings.length > 0) shouldFail = true;
   if (shouldFail) process.exit(1);
 }
@@ -271,27 +293,18 @@ function readSuppressionsFile(path, root) {
   const patterns = lines
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith('#'))
-    .map((p) => new RegExp(globToRegexCli(p)));
+    .map((raw) => {
+      let p = raw;
+      let rooted = false;
+      if (p.startsWith('/')) { rooted = true; p = p.slice(1); }
+      return new RegExp(globToRegExpStr(p, rooted, false));
+    });
   return {
     matches(file) {
       const rel = relative(root, file).replace(/\\/g, '/');
       return patterns.some((re) => re.test(rel));
     },
   };
-}
-
-function globToRegexCli(pattern) {
-  // Local minimal glob → regex (mirror of lib/ignore.mjs behavior, kept inline to avoid
-  // an extra import and to keep the audit CLI dependency-free).
-  let p = pattern;
-  let rooted = false;
-  if (p.startsWith('/')) { rooted = true; p = p.slice(1); }
-  let r = p.replace(/[.+^${}()|\\]/g, '\\$&');
-  r = r.replace(/\*\*/g, '\x00');
-  r = r.replace(/\*/g, '[^/]*');
-  r = r.replace(/\?/g, '[^/]');
-  r = r.replaceAll('\x00', '.*');
-  return (rooted ? '^' : '^(?:.*/)?') + r + '(?:/.*)?$';
 }
 
 function scanDeprecatedUsage(files, cat, root, suppressions) {
@@ -389,7 +402,7 @@ function emitMarkdown(payload) {
 
 function defaultBaseline() {
   try {
-    const remoteHead = execSync('git rev-parse --verify origin/main', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    const remoteHead = execFileSync('git', ['rev-parse', '--verify', 'origin/main'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
     if (remoteHead) return 'origin/main';
   } catch { /* fall through */ }
   return 'main';
@@ -406,10 +419,16 @@ function defaultBaseline() {
 function changedLineRanges(root, baseline) {
   /** @type {Map<string, Set<number>>} */
   const out = new Map();
+  if (typeof baseline !== 'string' || !GIT_REF_RE.test(baseline)) {
+    process.stderr.write(`[ui-tokenize] WARN: rejected unsafe baseline "${baseline}". Falling back to full-repo scan.\n`);
+    return new Map();
+  }
   let diff;
   try {
     // `<baseline>` (no `...HEAD`) covers committed + working-tree changes.
-    diff = execSync(`git diff --unified=0 --no-color ${baseline} -- .`, { cwd: root, maxBuffer: 64 * 1024 * 1024 }).toString();
+    // execFileSync with an argv array — never invokes /bin/sh, so user-controlled
+    // baseline cannot inject shell metacharacters.
+    diff = execFileSync('git', ['diff', '--unified=0', '--no-color', baseline, '--', '.'], { cwd: root, maxBuffer: 64 * 1024 * 1024 }).toString();
   } catch (err) {
     process.stderr.write(`[ui-tokenize] WARN: cannot diff against ${baseline}: ${err.message}\nFalling back to full-repo scan.\n`);
     // Fall through with empty map — caller treats this as full-repo.
@@ -436,20 +455,22 @@ function changedLineRanges(root, baseline) {
 function walkAllFiles(root) {
   /** @type {string[]} */
   const out = [];
-  walkDir(root, root, out);
+  const ignore = loadIgnore(root, readConfig(root).ignore);
+  walkDir(root, root, out, ignore);
   return out;
 }
 
-function walkDir(dir, root, out) {
+function walkDir(dir, root, out, ignore) {
   let entries;
   try { entries = readdirSync(dir, { withFileTypes: true }); }
   catch { return; }
   for (const e of entries) {
-    if (['node_modules', '.git', 'dist', 'build', '.next', '.turbo', 'coverage', '.tokenize'].includes(e.name)) continue;
     const full = join(dir, e.name);
+    if (ignore && ignore.isIgnored(full)) continue;
     if (e.isDirectory()) {
+      // Stop at nested package roots so monorepo packages get scanned per-root.
       if (existsSync(join(full, 'package.json')) && full !== root) continue;
-      walkDir(full, root, out);
+      walkDir(full, root, out, ignore);
     } else if (e.isFile()) {
       out.push(full);
     }
@@ -461,18 +482,21 @@ function walkDir(dir, root, out) {
 // --------------------------------------------------------------------------------
 
 async function cmdFix(rest) {
+  const flags = parseFlags(rest);
   const root = findTokenRoot(process.cwd()) || findRepoRoot(process.cwd()) || process.cwd();
   const cat = readCatalog(root) || discoverCatalog(root);
   const profile = readConsumerProfileFile(root);
   const tailwindDetected = cat.sources?.some((s) => s.type === 'tailwind') || false;
   const glob = rest.find((a) => !a.startsWith('--'));
   const files = glob ? expandGlob(glob, root) : walkAllFiles(root);
+  const suppressions = readSuppressionsFile(flags.suppressions, root);
 
   let modifiedCount = 0;
   let replacementCount = 0;
   for (const file of files) {
     if (isExemptFile(file)) continue;
     if (!classifySurface(file)) continue;
+    if (suppressions.matches(file)) continue;
     let content;
     try { content = readFileSync(file, 'utf8'); }
     catch { continue; }
@@ -507,7 +531,8 @@ function expandGlob(pattern, root) {
     const stats = statSyncSafe(path);
     if (stats?.isDirectory()) {
       const out = [];
-      walkDir(path, root, out);
+      const ignore = loadIgnore(root, readConfig(root).ignore);
+      walkDir(path, root, out, ignore);
       return out;
     }
     return [path];
@@ -516,7 +541,7 @@ function expandGlob(pattern, root) {
 }
 
 function statSyncSafe(p) {
-  try { return require('node:fs').statSync(p); }
+  try { return statSync(p); }
   catch { return null; }
 }
 
@@ -560,8 +585,10 @@ async function cmdPropose(rest) {
   }
   const root = findTokenRoot(process.cwd()) || findRepoRoot(process.cwd()) || process.cwd();
   const proposalsPath = join(root, 'tokens.proposed.json');
-  const existing = existsSync(proposalsPath) ? JSON.parse(readFileSync(proposalsPath, 'utf8')) : { proposals: [] };
-  const tempName = `__proposed.${kebabToCamel(intent)}`;
+  // Strict read — throws on a corrupted file rather than silently overwriting
+  // proposal history with a fresh `{ proposals: [] }`. Missing file is fine.
+  const existing = readJsonStrict(proposalsPath, { proposals: [] });
+  const tempName = `__proposed.${camelizeFromIntent(intent)}`;
   const id = `prop_${new Date().toISOString().slice(0, 10)}_${String(existing.proposals.length + 1).padStart(3, '0')}`;
   existing.proposals.push({
     id,
@@ -572,23 +599,12 @@ async function cmdPropose(rest) {
     status: 'pending',
     tempName,
   });
-  writeFileSync(proposalsPath, JSON.stringify(existing, null, 2));
+  atomicWriteJson(proposalsPath, existing);
   log(`✓ Proposed ${id}.`);
   log(`  value: ${value}`);
   log(`  intent: ${intent}`);
   log(`  use the temporary name: ${tempName}`);
   log(`  file: ${proposalsPath}`);
-}
-
-function kebabToCamel(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[^a-z]/, '');
-}
-
-function nameFromIntent(intent, value) {
-  const isColor = /#|rgb|hsl/.test(value);
-  const isDim = /\d+(px|rem|em|ch|vw|vh|%)$/.test(value);
-  const cat = isColor ? 'color' : isDim ? 'space' : 'token';
-  return `${cat}.${String(intent).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
 }
 
 // --------------------------------------------------------------------------------

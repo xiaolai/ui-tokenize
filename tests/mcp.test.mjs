@@ -127,6 +127,30 @@ test('MCP: tools/call propose appends to tokens.proposed.json', async () => {
   }
 });
 
+// Regression: when tokens.proposed.json is corrupted, propose must NOT silently
+// overwrite the entire history with one new proposal. It should surface the error
+// via isError so a human can recover. Defends finding #5 (Medium).
+test('MCP: propose refuses to overwrite a corrupted tokens.proposed.json', async () => {
+  const root = setupConsumer();
+  try {
+    const proposalsPath = join(root, 'tokens.proposed.json');
+    writeFileSync(proposalsPath, '{ this is not valid json');
+    const responses = await callServer(root, [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'tokenize__propose', arguments: { value: '#fb923c', intent: 'warning-bg' } } },
+    ], 2);
+    assert.ok(responses[1].result.isError, 'should error on malformed proposals file rather than overwrite');
+    assert.ok(
+      responses[1].result.content[0].text.includes('malformed'),
+      `expected malformed JSON error, got: ${responses[1].result.content[0].text}`,
+    );
+    // Critical: the original (broken) file content is preserved, not overwritten.
+    assert.equal(readFileSync(proposalsPath, 'utf8'), '{ this is not valid json');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('MCP: tools/call propose with missing args returns isError', async () => {
   const root = setupConsumer();
   try {

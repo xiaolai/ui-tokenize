@@ -3,8 +3,8 @@
 // JSON-RPC 2.0 over stdin/stdout, line-delimited (one JSON message per line).
 // Implements the subset of MCP spec needed for: initialize, tools/list, tools/call.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { discoverCatalog, readCatalog, writeCatalog } from '../lib/catalog.mjs';
 import { suggest } from '../lib/suggester.mjs';
@@ -12,6 +12,8 @@ import { parseColor } from '../lib/color.mjs';
 import { parseDimension } from '../lib/dimension.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
 import { readConfig } from '../lib/config.mjs';
+import { atomicWriteJson, readJsonStrict } from '../lib/json-io.mjs';
+import { camelizeFromIntent, nameFromIntent as proposalNameFromIntent } from '../lib/proposal.mjs';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const NAME_RE = /^[a-z][a-z0-9.-]*$/;
@@ -60,7 +62,14 @@ const TOOLS = [
       properties: {
         name: { type: 'string', description: 'Dot-path token name, e.g. "color.text.danger". Lowercase, alphanumeric, hyphen and dot only.' },
         value: { type: 'string' },
-        type: { type: 'string', enum: ['color', 'dimension', 'radius', 'shadow', 'duration', 'other'] },
+        type: {
+          type: 'string',
+          // Keep this enum in lockstep with ALLOWED_TOKEN_TYPES below.
+          // color/dimension/duration are validated strictly; fontFamily/fontWeight/
+          // number/radius/shadow/other accept any non-empty string in v0.1 (richer
+          // schema in v0.2).
+          enum: ['color', 'dimension', 'radius', 'shadow', 'duration', 'fontFamily', 'fontWeight', 'number', 'other'],
+        },
         description: { type: 'string' },
       },
       required: ['name', 'value', 'type'],
@@ -215,22 +224,23 @@ function ensureCatalog() {
 function proposeToken({ value, intent }) {
   if (!value || !intent) throw new Error('value and intent are required');
   const proposalsPath = join(root, 'tokens.proposed.json');
-  const existing = existsSync(proposalsPath)
-    ? safeReadJson(proposalsPath, { proposals: [] })
-    : { proposals: [] };
-  const tempName = `__proposed.${camelize(intent)}`;
+  // Strict read distinguishes "missing file" (start fresh) from "malformed file"
+  // (refuse to overwrite — surface the error so a human can recover the history
+  // instead of silently losing prior proposals).
+  const existing = readJsonStrict(proposalsPath, { proposals: [] });
+  const tempName = `__proposed.${camelizeFromIntent(intent)}`;
   const id = `prop_${new Date().toISOString().slice(0, 10)}_${String(existing.proposals.length + 1).padStart(3, '0')}`;
   existing.proposals.push({
     id,
     value: String(value),
     intent: String(intent),
-    proposedTokenName: nameFromIntent(intent, value),
+    proposedTokenName: proposalNameFromIntent(intent, value),
     callerFile: process.env.CLAUDE_TOOL_CALLER_FILE || null,
     timestamp: new Date().toISOString(),
     status: 'pending',
     tempName,
   });
-  writeFileSync(proposalsPath, JSON.stringify(existing, null, 2));
+  atomicWriteJson(proposalsPath, existing);
   return textContent(`Proposed. Use ${tempName} immediately; the real name will be assigned on human review.\n\nFile: ${proposalsPath}\nId: ${id}`);
 }
 
@@ -244,7 +254,9 @@ function addToken({ name, value, type, description }) {
   validateValueStrict(type, value);
 
   const tokensPath = join(root, 'tokens.json');
-  const doc = existsSync(tokensPath) ? safeReadJson(tokensPath, {}) : {};
+  // Strict read: refuse to start from a fresh `{}` if the existing tokens.json is
+  // corrupted — that would silently overwrite the entire catalog with one new entry.
+  const doc = readJsonStrict(tokensPath, {});
   // 1. Reject if exact token already exists.
   const existing = lookupTokenNode(doc, name);
   if (existing) throw new Error(`token "${name}" already exists with $value=${JSON.stringify(existing.$value)}`);
@@ -283,7 +295,7 @@ function deprecateToken({ name, reason, replacement }) {
   if (config.mode !== 'maintainer') throw new Error('deprecate requires maintainer mode');
   const tokensPath = join(root, 'tokens.json');
   if (!existsSync(tokensPath)) throw new Error(`tokens.json not found at ${tokensPath}`);
-  const doc = safeReadJson(tokensPath, {});
+  const doc = readJsonStrict(tokensPath, {});
   const node = lookupTokenNode(doc, name);
   if (!node) {
     if (lookupGroupNode(doc, name)) {
@@ -311,24 +323,6 @@ function textContent(text) {
 
 function errorResponse(id, code, message) {
   return { jsonrpc: '2.0', id, error: { code, message } };
-}
-
-function safeReadJson(path, fallback) {
-  try { return JSON.parse(readFileSync(path, 'utf8')); }
-  catch { return fallback; }
-}
-
-function camelize(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[^a-z]/, '');
-}
-
-function nameFromIntent(intent, value) {
-  const cat = parseColor(value) ? 'color' : parseDimension(value) ? 'space' : 'token';
-  return `${cat}.${kebab(intent)}`;
-}
-
-function kebab(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
 /**
@@ -421,10 +415,14 @@ function validateName(name) {
   }
 }
 
+// Single source of truth for accepted token types — the schema enum on
+// tokenize__add_token (above) is kept identical so the public contract and
+// the runtime check cannot drift.
+const ALLOWED_TOKEN_TYPES = ['color', 'dimension', 'radius', 'shadow', 'duration', 'fontFamily', 'fontWeight', 'number', 'other'];
+
 function validateType(type) {
-  const allowed = ['color', 'dimension', 'radius', 'shadow', 'duration', 'other', 'fontFamily', 'fontWeight', 'number'];
-  if (!allowed.includes(String(type))) {
-    throw new Error(`type "${type}" is not allowed; use one of: ${allowed.join(', ')}`);
+  if (!ALLOWED_TOKEN_TYPES.includes(String(type))) {
+    throw new Error(`type "${type}" is not allowed; use one of: ${ALLOWED_TOKEN_TYPES.join(', ')}`);
   }
 }
 
@@ -454,21 +452,12 @@ function validateValueStrict(type, value) {
   // Other types: accept any non-empty string for v0.1 (richer schema in v0.2).
 }
 
-/**
- * Atomic write: write to <path>.tmp.<pid>, then rename over the destination.
- * Avoids torn writes from crashes mid-write and reduces lost-update windows.
- */
-function atomicWriteJson(path, doc) {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n');
-  renameSync(tmp, path);
-}
-
 function logConflict(entry) {
   const dir = tokenizeDir(root);
   const path = join(dir, 'conflicts.json');
-  const existing = existsSync(path) ? safeReadJson(path, { conflicts: [] }) : { conflicts: [] };
+  // Strict read so a corrupted conflicts.json doesn't get silently replaced with a
+  // single new entry — losing the prior diagnostic history.
+  const existing = readJsonStrict(path, { conflicts: [] });
   existing.conflicts.push(entry);
   atomicWriteJson(path, existing);
 }
