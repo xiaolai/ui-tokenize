@@ -134,14 +134,16 @@ function handleInitialize(req) {
 }
 
 function handleToolsList(req) {
-  const config = readConfig(root);
-  const tools = TOOLS.filter((t) => {
-    if (t.name === 'tokenize__add_token' || t.name === 'tokenize__deprecate') {
-      return config.mode === 'maintainer';
-    }
-    return true;
-  });
-  return { jsonrpc: '2.0', id: req.id, result: { tools } };
+  // Always list every tool. Maintainer-only tools (tokenize__add_token,
+  // tokenize__deprecate) are tagged "MAINTAINER MODE ONLY" in their
+  // descriptions and reject at call-time when config.mode !== 'maintainer'
+  // (see addToken / deprecateToken). The earlier behavior — filtering them
+  // out of the list in consumer mode — meant that flipping .tokenize/config.json
+  // to maintainer mid-session had no effect: MCP clients cache tools/list at
+  // server-spawn time. Always-listing makes mode flips work without a session
+  // restart at the cost of two extra tool entries that consumer-mode callers
+  // see as "MAINTAINER MODE ONLY" and can't successfully invoke.
+  return { jsonrpc: '2.0', id: req.id, result: { tools: TOOLS } };
 }
 
 function handleToolsCall(req) {

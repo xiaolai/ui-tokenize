@@ -75,7 +75,7 @@ test('MCP: initialize returns protocol version', async () => {
   }
 });
 
-test('MCP: tools/list excludes maintainer-only tools in consumer mode', async () => {
+test('MCP: tools/list exposes all tools in consumer mode (filter at call-time, not at list-time)', async () => {
   const root = setupConsumer();
   try {
     const responses = await callServer(root, [
@@ -86,8 +86,30 @@ test('MCP: tools/list excludes maintainer-only tools in consumer mode', async ()
     assert.ok(tools.includes('tokenize__list_tokens'));
     assert.ok(tools.includes('tokenize__find_closest'));
     assert.ok(tools.includes('tokenize__propose'));
-    assert.ok(!tools.includes('tokenize__add_token'), 'add_token must not appear in consumer mode');
-    assert.ok(!tools.includes('tokenize__deprecate'), 'deprecate must not appear in consumer mode');
+    // Maintainer-only tools are still listed; the descriptions mark them
+    // "MAINTAINER MODE ONLY" and the call handlers reject when mode is
+    // wrong. This makes mode flips work without a session restart, since
+    // MCP clients cache tools/list at server-spawn time.
+    assert.ok(tools.includes('tokenize__add_token'), 'add_token should be listed regardless of mode');
+    assert.ok(tools.includes('tokenize__deprecate'), 'deprecate should be listed regardless of mode');
+    const addTokenDesc = responses[1].result.tools.find((t) => t.name === 'tokenize__add_token').description;
+    assert.ok(/MAINTAINER MODE ONLY/.test(addTokenDesc),
+      'add_token description should warn callers it requires maintainer mode');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('MCP: add_token call rejects in consumer mode', async () => {
+  const root = setupConsumer();
+  try {
+    const responses = await callServer(root, [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'tokenize__add_token', arguments: { name: 'color.foo', value: '#000', type: 'color' } } },
+    ], 2);
+    assert.ok(responses[1].result.isError, 'expected isError on consumer-mode add_token call');
+    const txt = responses[1].result.content[0].text;
+    assert.ok(/maintainer mode/i.test(txt), `expected maintainer-mode error, got: ${txt}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

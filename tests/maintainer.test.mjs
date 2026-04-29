@@ -197,7 +197,7 @@ test('maintainer: deprecate marks $deprecated and writes atomically', async () =
   }
 });
 
-test('consumer mode: add_token / deprecate are not exposed', async () => {
+test('consumer mode: add_token / deprecate are listed but reject at call-time', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ui-tokenize-cons-'));
   try {
     writeFileSync(join(root, 'package.json'), '{"name":"x"}');
@@ -209,7 +209,10 @@ test('consumer mode: add_token / deprecate are not exposed', async () => {
       { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'tokenize__add_token', arguments: { name: 'color.y', value: '#fff', type: 'color' } } },
     ], 3);
     const tools = responses[1].result.tools.map((t) => t.name);
-    assert.ok(!tools.includes('tokenize__add_token'));
+    // Always-listed regardless of mode (so mode flips work without restart) —
+    // but the call still rejects in consumer mode.
+    assert.ok(tools.includes('tokenize__add_token'));
+    assert.ok(tools.includes('tokenize__deprecate'));
     assert.ok(responses[2].result.isError);
     assert.ok(responses[2].result.content[0].text.includes('maintainer mode'));
   } finally {
