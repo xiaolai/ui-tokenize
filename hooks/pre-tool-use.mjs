@@ -4,7 +4,7 @@
 
 import { readSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isCatalogTokenSource, readCatalog } from '../lib/catalog.mjs';
+import { getCatalogSourceType, readCatalog } from '../lib/catalog.mjs';
 import { isExemptFile, scan } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
 import { renderToken, replaceAt } from '../lib/render.mjs';
@@ -39,12 +39,21 @@ if (config.disabled) passthrough('plugin disabled in config');
 // BEFORE the exempt-file check (which would otherwise pass-through tokens.json as a
 // "non-violation surface"). The catalog is the source of truth for what counts.
 const catalog = readCatalog(root);
-if (isCatalogTokenSource(targetFile, catalog)) {
+const sourceType = getCatalogSourceType(targetFile, catalog);
+if (sourceType) {
   if (config.mode !== 'maintainer') {
     emit(denyTokenSourceEdit(targetFile));
-  } else {
+  }
+  // Maintainer mode: only DTCG sources need the validated MCP path
+  // (tokenize__add_token / tokenize__deprecate). css-vars and other
+  // free-form sources have no structural schema to enforce, so direct
+  // edits are the practical path for additions and bulk system
+  // migrations. tokens.json keeps the deny-direct-edit policy because
+  // that's where schema enforcement actually matters.
+  if (sourceType === 'dtcg-json') {
     emit(denyMaintainerDirectEdit(targetFile));
   }
+  passthrough(`maintainer mode, ${sourceType} source`);
 }
 
 if (isExemptFile(targetFile)) passthrough('exempt file');
@@ -263,7 +272,7 @@ function denyTokenSourceEdit(file) {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: `[ui-tokenize] Direct edits to ${file} are not allowed in consumer mode.\n\nTo add a new token, call MCP tool tokenize__propose(value, intent). It returns a temporary __proposed.* name you can use immediately, and queues the proposal for human review.\n\nIf this project should be in maintainer mode, set "mode": "maintainer" in .tokenize/config.json — and even then, only the validated tokenize__add_token / tokenize__deprecate MCP tools may write tokens.json (direct Write/Edit remains blocked to enforce schema and naming rules).`,
+      permissionDecisionReason: `[ui-tokenize] Direct edits to ${file} are not allowed in consumer mode.\n\nTo add a new token, call MCP tool tokenize__propose(value, intent). It returns a temporary __proposed.* name you can use immediately, and queues the proposal for human review.\n\nIf this project should be in maintainer mode, set "mode": "maintainer" in .tokenize/config.json. css-vars sources (e.g. theme.css) then allow direct edits — useful for system migrations. DTCG token files (tokens.json) still require the validated tokenize__add_token / tokenize__deprecate MCP tools to enforce schema and naming rules.`,
     },
   };
 }

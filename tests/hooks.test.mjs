@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -279,6 +279,103 @@ test('PreToolUse: MultiEdit applies all edit rewrites correctly', () => {
       `first edit not rewritten: ${updatedEdits[0].new_string}`);
     assert.ok(updatedEdits[1].new_string.includes('var(--color-danger)'),
       `second edit not rewritten: ${updatedEdits[1].new_string}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── css-vars sources in maintainer mode allow direct edit ──────────────
+// Regression: prior behavior denied ALL token-source edits in maintainer
+// mode, leaving css-vars-based projects with no working unlock path
+// (add_token writes only to tokens.json, not css-vars). Now: dtcg-json
+// sources keep the deny; css-vars sources passthrough.
+
+function setupCssVarsProject({ maintainer = true } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'ui-tokenize-cssvars-'));
+  writeFileSync(join(root, 'package.json'), '{"name":"cssvars-test"}');
+  // src/styles/theme.css with a single :root token — discovery picks this up
+  // as a css-vars source.
+  const cssDir = join(root, 'src', 'styles');
+  mkdirSync(cssDir, { recursive: true });
+  writeFileSync(join(cssDir, 'theme.css'), ':root {\n  --color-primary: #2563eb;\n}\n');
+  if (maintainer) {
+    mkdirSync(join(root, '.tokenize'), { recursive: true });
+    writeFileSync(join(root, '.tokenize', 'config.json'), JSON.stringify({ mode: 'maintainer' }));
+  }
+  return root;
+}
+
+test('PreToolUse: css-vars source allows direct Write in maintainer mode', () => {
+  const root = setupCssVarsProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'styles', 'theme.css'),
+        content: ':root {\n  --color-primary: #2563eb;\n  --color-accent: #f97316;\n}\n',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow',
+      `expected allow for css-vars in maintainer mode, got: ${out.hookSpecificOutput?.permissionDecisionReason}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse: css-vars source denies direct Write in consumer mode', () => {
+  const root = setupCssVarsProject({ maintainer: false });
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'styles', 'theme.css'),
+        content: ':root { --color-primary: red; }',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(
+      out.hookSpecificOutput?.permissionDecisionReason.includes('not allowed in consumer mode'),
+      `expected consumer-mode deny, got: ${out.hookSpecificOutput?.permissionDecisionReason}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse: tokens.json source still denies direct Write in maintainer mode', () => {
+  // DTCG sources keep the deny-direct-edit policy — that's where schema
+  // enforcement actually matters.
+  const root = setupProject();
+  try {
+    mkdirSync(join(root, '.tokenize'), { recursive: true });
+    writeFileSync(join(root, '.tokenize', 'config.json'), JSON.stringify({ mode: 'maintainer' }));
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'tokens.json'),
+        content: '{"color":{"primary":{"$value":"#000","$type":"color"}}}',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(
+      out.hookSpecificOutput?.permissionDecisionReason.includes('add_token'),
+      `expected DTCG-direct-edit deny pointing at add_token, got: ${out.hookSpecificOutput?.permissionDecisionReason}`
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
