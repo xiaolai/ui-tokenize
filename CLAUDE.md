@@ -34,7 +34,7 @@ After install, run the test suite from the plugin directory to confirm hooks and
 npm test
 ```
 
-Expected: `tests <N>   pass <N>   fail 0` (currently 116 / 116).
+Expected: `tests <N>   pass <N>   fail 0` (currently 117 / 117).
 
 ## What you should know
 
