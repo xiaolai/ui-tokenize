@@ -69,7 +69,7 @@ After `init`, every `Write`/`Edit`/`MultiEdit` from any agent in this project is
 npm test
 ```
 
-Currently 113 / 113 passing.
+Currently 116 / 116 passing.
 
 ## Status
 
