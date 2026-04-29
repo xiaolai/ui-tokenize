@@ -28,6 +28,8 @@ Zero runtime dependencies. No build step. Pure Node ESM, ≥ 20.
 claude plugin install ui-tokenize@xiaolai --scope project
 ```
 
+> **Install fails with "Plugin not found in marketplace 'xiaolai'"?** Your local marketplace clone is stale. Run `claude plugin marketplace update xiaolai` and retry — `plugin install` does not auto-refresh.
+
 ### Bootstrap
 
 In a project with existing tokens (DTCG `tokens.json`, CSS `:root` vars, SCSS / LESS / TS / Tailwind / CSS-in-JS):
