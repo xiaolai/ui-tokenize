@@ -34,7 +34,7 @@ After install, run the test suite from the plugin directory to confirm hooks and
 npm test
 ```
 
-Expected: `tests <N>   pass <N>   fail 0` (currently 117 / 117).
+Expected: `tests <N>   pass <N>   fail 0` (currently 123 / 123).
 
 ## What you should know
 
@@ -55,19 +55,30 @@ Expected: `tests <N>   pass <N>   fail 0` (currently 117 / 117).
 
 ## Mode awareness
 
-Read `.tokenize/config.json` if present. The `mode` field controls which MCP tools are available:
+Read `.tokenize/config.json` if present. Two independent fields shape behavior:
+
+`mode` — controls which MCP tools are available:
 
 - `consumer` (default): no token-mutation tools; use `tokenize__propose` for new tokens (queues them for human review)
 - `maintainer`: `tokenize__add_token` and `tokenize__deprecate` are available
 
+`strictness` — controls how the PreToolUse hook reacts to uncertain literals:
+
+- `strict` (default): exact-match rewrite + deny-with-suggestions on uncertain values; hard-stops after 3 consecutive denies on the same file in a session
+- `advisory`: exact-match rewrite + passthrough on uncertain values; PostToolUse surfaces residuals as `additionalContext` with nearest-token suggestions; no deny budget, no hard-stop
+
+The two fields compose. `strictness: advisory` does not weaken structural protections — direct edits to token-source files (e.g. `tokens.json`) remain denied in consumer mode regardless.
+
 ## Recovery patterns
 
-When the PreToolUse hook denies your call:
+When the PreToolUse hook denies your call (strict mode):
 
 1. Read the `additionalContext` field for the structured suggestion
 2. If a `nearestTokens` array is present and one is acceptable, use it directly in your retry
 3. If `nearestTokens` is empty or none are acceptable, call `tokenize__propose` with the value and a short intent string; it returns a temporary token name you can use immediately
 4. Never repeat the same hardcoded value across retries — the ledger tracks unresolved violations and will hard-stop after two repeated denies
+
+In advisory mode, treat the PostToolUse `additionalContext` finding the same way — apply the suggested token in the next edit, or call `tokenize__propose` if no candidate fits.
 
 ## Audit awareness
 

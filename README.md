@@ -65,13 +65,24 @@ After `init`, every `Write`/`Edit`/`MultiEdit` from any agent in this project is
 | `consumer` (default) | Agent cannot write `tokens.json` directly. New tokens go through `tokenize__propose`.                                                                                                                 |
 | `maintainer`         | `tokenize__add_token` and `tokenize__deprecate` MCP tools are exposed; they write to `tokens.json` after DTCG / naming / collision validation. Direct `Write`/`Edit` of `tokens.json` remains denied. |
 
+### Strictness
+
+`.tokenize/config.json` `strictness` controls how the PreToolUse hook reacts to literals that don't match a known token exactly:
+
+| Strictness            | Effect                                                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `strict` (default)    | Exact-match literals are rewritten silently; uncertain literals are denied with structured suggestions. Three consecutive denies on the same file in a session hard-stop further edits.               |
+| `advisory`            | Exact-match literals are still rewritten silently; uncertain literals pass through and PostToolUse surfaces them as `additionalContext` with nearest-token suggestions. No deny budget, no hard-stop. |
+
+Pick `strict` for mature design systems where you want every off-catalog value caught at write-time; pick `advisory` for onboarding projects with sparse catalogs where the deny path would fire too often. `strictness` does not weaken structural protections — direct edits to token-source files (`tokens.json`, catalog CSS files in consumer mode) remain denied in either setting.
+
 ### Verify
 
 ```bash
 npm test
 ```
 
-Currently 117 / 117 passing.
+Currently 123 / 123 passing.
 
 ## Status
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // PreToolUse hook: rewrite-first on confidence-1.0 (D-018);
-// deny with structured suggestions otherwise; hard-stop after 2 unresolved blocks per file (D-019).
+// uncertain literals → deny with structured suggestions in strict mode, or passthrough
+// in advisory mode (PostToolUse then surfaces findings as additionalContext);
+// hard-stop after 2 unresolved blocks per file (D-019, strict mode only).
 
 import { readSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -100,8 +102,14 @@ const rewrites = allReports.filter((x) =>
 );
 const denies = allReports.filter((x) => !rewrites.includes(x));
 
-if (rewrites.length > 0 && denies.length === 0) {
-  // All exact matches → rewrite and allow.
+const isAdvisory = config.strictness === 'advisory';
+
+// Apply rewrites whenever possible:
+//   - strict mode: only when there are no co-existing uncertain literals (mixed → deny)
+//   - advisory mode: always, even alongside uncertain literals (PostToolUse handles residuals)
+const shouldRewrite = rewrites.length > 0 && (denies.length === 0 || isAdvisory);
+
+if (shouldRewrite) {
   const updatedInput = applyRewritesPerCandidate(toolInput, toolName, candidates, rewrites);
   for (const x of rewrites) {
     appendEvent(targetFile, {
@@ -113,12 +121,23 @@ if (rewrites.length > 0 && denies.length === 0) {
       token: x.report.primary.tokenName,
     });
   }
-  // A successful rewrite is also a budget-resetting outcome.
-  appendEvent(targetFile, { kind: 'resolve', sessionId, file: targetFile });
+  // Budget reset only when nothing's left unresolved. In advisory mode with
+  // co-existing uncertain literals, PostToolUse will still surface findings,
+  // so we don't claim resolution here.
+  if (denies.length === 0) {
+    appendEvent(targetFile, { kind: 'resolve', sessionId, file: targetFile });
+  }
   emit(allowRewrite(updatedInput, rewrites.map((x) => x.report)));
 }
 
-// Mixed or all-denies → check budget, emit deny.
+// Advisory mode with no exact-match rewrites — passthrough. PostToolUse will
+// re-scan the written file and emit `additionalContext` listing the residual
+// literals plus nearest-token suggestions. No deny budget impact.
+if (isAdvisory) {
+  passthrough(`advisory mode: ${denies.length} unresolved literal(s); see PostToolUse for findings`);
+}
+
+// Strict mode + denies → check budget, emit deny.
 const denyCount = consecutiveDeniesFor(targetFile, targetFile, sessionId);
 if (denyCount >= HARD_STOP_THRESHOLD) {
   emit(hardStop(`Three consecutive denied tool calls already exist for ${targetFile} in this session; further edits to this file are blocked until they are addressed via tokenize__propose or manual fix.`));

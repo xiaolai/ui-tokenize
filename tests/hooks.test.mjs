@@ -12,6 +12,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(HERE, '..');
 const SESSION_START = join(PLUGIN_ROOT, 'hooks', 'session-start.mjs');
 const PRE_TOOL_USE = join(PLUGIN_ROOT, 'hooks', 'pre-tool-use.mjs');
+const POST_TOOL_USE = join(PLUGIN_ROOT, 'hooks', 'post-tool-use.mjs');
 
 function setupProject() {
   const root = mkdtempSync(join(tmpdir(), 'ui-tokenize-hook-'));
@@ -26,6 +27,16 @@ function setupProject() {
       4: { $value: '16px', $type: 'dimension' },
     },
   }));
+  return root;
+}
+
+function setupAdvisoryProject() {
+  const root = setupProject();
+  mkdirSync(join(root, '.tokenize'), { recursive: true });
+  writeFileSync(
+    join(root, '.tokenize', 'config.json'),
+    JSON.stringify({ strictness: 'advisory' }),
+  );
   return root;
 }
 
@@ -376,6 +387,158 @@ test('PreToolUse: tokens.json source still denies direct Write in maintainer mod
       out.hookSpecificOutput?.permissionDecisionReason.includes('add_token'),
       `expected DTCG-direct-edit deny pointing at add_token, got: ${out.hookSpecificOutput?.permissionDecisionReason}`
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --------------------------------------------------------------------------------
+// Advisory mode (strictness: 'advisory')
+// --------------------------------------------------------------------------------
+
+test('PreToolUse advisory: exact-match literal still rewrites silently', () => {
+  const root = setupAdvisoryProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'a.css'),
+        content: '.btn { color: #2563eb; }',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow');
+    assert.ok(out.hookSpecificOutput?.updatedInput?.content.includes('var(--color-primary)'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse advisory: uncertain literal passes through (no deny)', () => {
+  const root = setupAdvisoryProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'b.css'),
+        content: '.btn { color: #2462ea; }', // close to color.primary, not exact
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(
+      out.hookSpecificOutput?.permissionDecision,
+      'allow',
+      `expected advisory passthrough, got: ${JSON.stringify(out)}`,
+    );
+    assert.ok(
+      /advisory/i.test(out.hookSpecificOutput?.permissionDecisionReason || ''),
+      `expected advisory reason, got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse advisory: mixed literals — rewrites exacts, lets uncertain land', () => {
+  const root = setupAdvisoryProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'c.css'),
+        content: '.btn { color: #2563eb; background: #2462ea; }',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow');
+    const written = out.hookSpecificOutput?.updatedInput?.content || '';
+    assert.ok(written.includes('var(--color-primary)'), 'exact match should be rewritten');
+    assert.ok(written.includes('#2462ea'), 'uncertain literal should remain for PostToolUse to surface');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse advisory: token-source edits still denied (structural protection)', () => {
+  const root = setupAdvisoryProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'tokens.json'),
+        content: '{"color":{"new":{"$value":"#0f0","$type":"color"}}}',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(
+      out.hookSpecificOutput?.permissionDecision,
+      'deny',
+      'advisory must not bypass token-source protection',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse advisory: never accumulates hard-stop budget', () => {
+  const root = setupAdvisoryProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const file = join(root, 'src', 'd.css');
+    // Five passes that would deny in strict mode and trip hard-stop after three.
+    for (let i = 0; i < 5; i++) {
+      const r = runHook(PRE_TOOL_USE, {
+        session_id: 's1',
+        tool_name: 'Write',
+        tool_input: { file_path: file, content: `.x { color: #ff${i}000; }` },
+      }, root);
+      const out = JSON.parse(r.stdout);
+      assert.equal(
+        out.hookSpecificOutput?.permissionDecision,
+        'allow',
+        `iteration ${i}: advisory must not accumulate denies; got ${JSON.stringify(out)}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PostToolUse advisory: residual literal in written file emits additionalContext finding', () => {
+  const root = setupAdvisoryProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    // Simulate that the file has already landed on disk with an uncertain literal.
+    mkdirSync(join(root, 'src'), { recursive: true });
+    const file = join(root, 'src', 'e.css');
+    writeFileSync(file, '.btn { color: #2462ea; }');
+    const event = {
+      tool_name: 'Write',
+      tool_input: { file_path: file, content: '.btn { color: #2462ea; }' },
+    };
+    const r = runHook(POST_TOOL_USE, event, root);
+    if (r.stdout.trim().length === 0) {
+      assert.fail(`expected PostToolUse to emit a finding; stderr: ${r.stderr}`);
+    }
+    const out = JSON.parse(r.stdout);
+    const ctx = out.hookSpecificOutput?.additionalContext || '';
+    assert.ok(
+      /Residual hardcoded values/.test(ctx),
+      `expected residual-literal advisory, got: ${ctx}`,
+    );
+    assert.ok(/color\.primary/.test(ctx), 'expected nearest-token suggestion in advisory finding');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
