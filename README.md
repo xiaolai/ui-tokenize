@@ -82,7 +82,7 @@ Pick `strict` for mature design systems where you want every off-catalog value c
 npm test
 ```
 
-Currently 123 / 123 passing.
+Currently 147 / 147 passing.
 
 ## Status
 

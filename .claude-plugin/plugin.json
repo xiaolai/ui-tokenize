@@ -1,6 +1,6 @@
 {
   "name": "ui-tokenize",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Block hardcoded UI values; enforce design tokens with rewrite-first hooks and a closed-loop control system",
   "author": {
     "name": "xiaolai"

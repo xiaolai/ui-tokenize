@@ -104,3 +104,190 @@ test('scan: exempt files return empty', () => {
   const v = scan(':root { --color-primary: #2563eb; }', '/x/tokens.css');
   assert.equal(v.length, 0);
 });
+
+// --------------------------------------------------------------------------------
+// Comment-stripping false-positive regression tests
+// --------------------------------------------------------------------------------
+
+test('scan: ignores hex in JS line comment (regression: issue refs)', () => {
+  const v = scan('const x = 1; // fixes issue #2563eb in some module\n', '/x/file.ts');
+  assert.equal(v.length, 0, `unexpected violations: ${JSON.stringify(v)}`);
+});
+
+test('scan: ignores hex in JS block comment', () => {
+  const v = scan('const x = 1; /* see #2563eb for context */ const y = 2;\n', '/x/file.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: ignores hex in multi-line JSDoc', () => {
+  const src = [
+    '/**',
+    ' * Fixes color drift.',
+    ' * @see #2563eb',
+    ' * @issue #abc',
+    ' */',
+    'export const X = 1;',
+  ].join('\n');
+  const v = scan(src, '/x/util.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: short hex shorthand (#298) inside JS line comment is not flagged', () => {
+  const v = scan('// see #298 for the original report\n', '/x/handler.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: ignores hex in JSX block comment {/* */}', () => {
+  const v = scan('export const X = () => <div>{/* tracked at #2563eb */}<span/></div>;', '/x/View.tsx');
+  assert.equal(v.length, 0);
+});
+
+test('scan: ignores hex in CSS block comment', () => {
+  const v = scan('.foo { /* alias for #2563eb */ color: blue; }\n', '/x/style.css');
+  assert.equal(v.length, 0);
+});
+
+test('scan: ignores hex in SCSS line comment', () => {
+  const v = scan('$primary: blue; // legacy was #2563eb\n', '/x/style.scss');
+  assert.equal(v.length, 0);
+});
+
+test('scan: ignores hex in HTML comment', () => {
+  const v = scan('<!-- old palette: #2563eb --><div></div>', '/x/page.html');
+  assert.equal(v.length, 0);
+});
+
+test('scan: still flags real hex AFTER a comment on same line', () => {
+  const v = scan('.foo { /* see #abc */ color: #2563eb; }\n', '/x/style.css');
+  assert.equal(v.length, 1, `expected one violation, got: ${JSON.stringify(v)}`);
+  assert.equal(v[0].literal, '#2563eb');
+});
+
+test('scan: still flags real hex BEFORE a comment on same line', () => {
+  const v = scan('const x = "#2563eb"; // an example value', '/x/util.ts');
+  // The hex is inside a string literal — strings remain scannable
+  // (we want to catch JSX inline-style strings like style={{color:"#abc"}}).
+  assert.ok(v.some((x) => x.literal === '#2563eb'));
+});
+
+test('scan: comment-like content INSIDE a string is preserved', () => {
+  // The `//` here is part of a string, not a real comment. The hex that
+  // *follows* the string on the same line should still be flagged because
+  // the string protection consumes only the string, not later code.
+  const v = scan('const url = "// not a comment"; const c = "#2563eb";', '/x/util.ts');
+  assert.ok(v.some((x) => x.literal === '#2563eb'));
+});
+
+test('scan: block-comment-like content inside a single-quoted string is preserved', () => {
+  const v = scan(`const s = '/* still a string */'; const c = "#abc";`, '/x/util.ts');
+  // The `/* */` inside the string must NOT consume the rest of the line.
+  // After string protection, the second string `"#abc"` should still be scanned.
+  assert.ok(v.some((x) => x.literal === '#abc'));
+});
+
+test('scan: multi-line block comment in TS strips content across line boundaries', () => {
+  const src = [
+    'const a = 1; /*',
+    ' * still inside a comment',
+    ' * #2563eb is referenced here',
+    ' */ const b = 2;',
+  ].join('\n');
+  const v = scan(src, '/x/file.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: line numbers stay correct after multi-line block comment is stripped', () => {
+  const src = [
+    'const a = 1; /*',                // line 1
+    ' * #abc multi',                  // line 2 (inside block comment)
+    ' */',                             // line 3
+    'const c = "#2563eb";',           // line 4 — real violation
+  ].join('\n');
+  const v = scan(src, '/x/file.ts');
+  assert.equal(v.length, 1);
+  assert.equal(v[0].line, 4);
+});
+
+// --------------------------------------------------------------------------------
+// HEX_RE lookbehind tightening (URL fragments, private fields, identifier hashes)
+// --------------------------------------------------------------------------------
+
+test('scan: URL fragment in CSS comment is not flagged (was double-protected by both fixes)', () => {
+  const v = scan('/* see https://example.com#2563eb */\n.x { color: blue; }', '/x/style.css');
+  assert.equal(v.length, 0);
+});
+
+test('scan: URL fragment after slash is not flagged', () => {
+  // String contents are preserved, but the lookbehind rejects `#abc` preceded
+  // by an identifier character. `https://example.com/path#2563eb` has `h`
+  // before the `#` (after path char `h`).
+  const v = scan('const u = "https://example.com/path#2563eb";', '/x/util.ts');
+  assert.equal(v.length, 0, `unexpected violations: ${JSON.stringify(v)}`);
+});
+
+test('scan: GitHub permalink-style fragment is not flagged', () => {
+  const v = scan('const u = "github.com/foo/pull/298#abc123";', '/x/util.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: URL fragment after dash is not flagged', () => {
+  const v = scan('const u = "/path-name#abc123";', '/x/util.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: TS private-field access (this.#xxx) is not flagged', () => {
+  const v = scan('class X { #abc = 1; getter() { return this.#abc; } }', '/x/x.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: still flags hex preceded by a CSS-value-marker character (no regression)', () => {
+  // Each of these contexts should match HEX_RE under the new lookbehind.
+  const cases = [
+    { src: '.x { color: #abc; }',        path: '/x/a.css', expect: '#abc' },
+    { src: '.x { color:#abc; }',         path: '/x/b.css', expect: '#abc' }, // no space after `:`
+    { src: '.x { box-shadow: 0 0 5px #abc; }', path: '/x/c.css', expect: '#abc' },
+    { src: '.x { background: linear-gradient(red, #abc, blue); }', path: '/x/d.css', expect: '#abc' },
+    { src: 'export const X = () => <div style={{ color: "#abc" }}/>;', path: '/x/e.tsx', expect: '#abc' },
+    { src: '<div style="color: #abc"></div>',     path: '/x/f.html', expect: '#abc' },
+  ];
+  for (const c of cases) {
+    const v = scan(c.src, c.path);
+    assert.ok(
+      v.some((x) => x.literal === c.expect),
+      `${c.path}: expected to find ${c.expect}, got ${JSON.stringify(v)}`,
+    );
+  }
+});
+
+test('scan: triple-slash directive does not produce false positives', () => {
+  const v = scan('/// <reference types="node" />\nconst c = 1;', '/x/index.ts');
+  assert.equal(v.length, 0);
+});
+
+test('scan: shebang line in .mjs is not flagged', () => {
+  const v = scan('#!/usr/bin/env node\nconst c = 1;', '/x/cli.mjs');
+  assert.equal(v.length, 0);
+});
+
+test('scan: SCSS file with both block and line comments scrubbed', () => {
+  const src = [
+    '/* block: #2563eb */',
+    '// line: #ff0000',
+    '$ok: red;',
+    '.x { color: #2563eb; }',
+  ].join('\n');
+  const v = scan(src, '/x/style.scss');
+  assert.equal(v.length, 1, `unexpected violations: ${JSON.stringify(v)}`);
+  assert.equal(v[0].literal, '#2563eb');
+});
+
+test('scan: HTML file with comment around inline style still flags the inline style', () => {
+  const src = [
+    '<!-- old: #2563eb -->',
+    '<div style="color: #ff0000"></div>',
+  ].join('\n');
+  const v = scan(src, '/x/page.html');
+  // Comment-stripping kills the first hex; HTML inline style still fires.
+  assert.ok(v.some((x) => x.literal === '#ff0000'));
+  assert.ok(!v.some((x) => x.literal === '#2563eb'));
+});
