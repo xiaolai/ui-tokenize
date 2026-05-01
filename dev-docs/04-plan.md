@@ -201,7 +201,7 @@ Reason: CSS / JSX / TSX / Vue / Svelte / Astro all need AST parsing. TS-side AST
 
 | Feature | Status |
 |---|---|
-| `agents/token-reviewer` semantic-mis-pick subagent | v0.2 |
+| `agents/token-reviewer` semantic-mis-pick subagent | shipped in v0.4 |
 | MCP server exposing `list_tokens` / `find_closest_token` / `get_token_value` | v0.2 |
 | Multi-mode catalog (light / dark / etc.) | v0.2 |
 | React Native support | v0.3 |
@@ -282,7 +282,9 @@ Rough sizing for planning, not commitment:
 |---|---|---|
 | 0.1.0 | M0 + M1 + M2 + M3 + M4 | All v1 acceptance criteria green |
 | 0.1.x | bug fixes from real-world use | (responsive) |
-| 0.2.0 | M5 — token-reviewer subagent + MCP exposure | New feature acceptance |
-| 0.3.0 | React Native + SwiftUI | Surface expansion |
+| 0.2.0 | strictness=advisory | New feature acceptance |
+| 0.3.0 | per-project surfaces allowlist | New feature acceptance |
+| 0.4.0 | M5 — token-reviewer subagent (semantic review) | New feature acceptance |
+| 0.5.0 | React Native + SwiftUI | Surface expansion |
 
 Initial release goes to `xiaolai/claude-plugin-marketplace` with central marketplace manifest update per the workflow in `claude-plugins/CLAUDE.md`.

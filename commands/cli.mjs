@@ -36,6 +36,7 @@ try {
     case 'fix':      await cmdFix(args.slice(1)); break;
     case 'metrics':  await cmdMetrics(args.slice(1)); break;
     case 'propose':  await cmdPropose(args.slice(1)); break;
+    case 'review-prep': await cmdReviewPrep(args.slice(1)); break;
     default:
       printUsage();
       process.exit(2);
@@ -608,6 +609,133 @@ async function cmdPropose(rest) {
 }
 
 // --------------------------------------------------------------------------------
+// review-prep — find token usages and emit JSON for the token-reviewer agent
+// --------------------------------------------------------------------------------
+//
+// The deterministic half of semantic review. Locates *legitimate* token
+// references (var(--x), tokens.x.y, $x, @x), resolves each to a catalog
+// entry, captures surrounding code as context, and emits structured JSON.
+// The agent (agents/token-reviewer.md) reads that JSON and applies semantic
+// judgment — does this token's *meaning* match what the surrounding code
+// is actually doing?
+//
+// Scope: review-prep finds usages that exist; it does NOT detect missing
+// tokens, hardcoded literals, or semantic errors. Those are audit's job.
+
+async function cmdReviewPrep(rest) {
+  // Patterns are scoped inside the function so module-level execution order
+  // doesn't put them in the temporal dead zone before the top-level switch
+  // dispatches to this function. Each pattern declares the surfaces it applies
+  // to — `tokens.x.y` only makes sense in JS surfaces, `$x` only in SCSS, etc.
+  // Without surface gating, plain prose like "tokens.light is the light token"
+  // in HTML body text would falsely match.
+  const ANY_CSS_SURFACE = ['css', 'scss', 'less', 'tsx', 'vue', 'svelte', 'astro', 'html', 'svg'];
+  const TOKEN_REF_PATTERNS = [
+    // var(--kebab-name) — CSS-shaped value references; legal in CSS, in JSX inline
+    // styles, in CSS-in-JS template literals, and in HTML/SVG attribute values.
+    { re: /var\(--([a-zA-Z0-9][a-zA-Z0-9_-]*)\)/g, kind: 'css-var', surfaces: ANY_CSS_SURFACE, toName: (m) => m[1].replace(/-/g, '.') },
+    // tokens.dotted.path — JS/TS only. Avoids matching the literal text
+    // "tokens.x" in markdown, HTML body text, or comments.
+    { re: /\btokens\.([a-zA-Z_][a-zA-Z0-9_.]*)/g, kind: 'js-tokens', surfaces: ['ts', 'tsx'], toName: (m) => m[1] },
+    // $kebab — SCSS variable reference. Anchored to non-identifier left to avoid `prefix$x`.
+    { re: /(?<![a-zA-Z0-9_])\$([a-zA-Z][a-zA-Z0-9_-]*)/g, kind: 'scss-var', surfaces: ['scss'], toName: (m) => m[1].replace(/-/g, '.') },
+    // @kebab — LESS variable reference. Same anchor.
+    { re: /(?<![a-zA-Z0-9_])@([a-zA-Z][a-zA-Z0-9_-]*)/g, kind: 'less-var', surfaces: ['less'], toName: (m) => m[1].replace(/-/g, '.') },
+  ];
+  const REVIEW_CONTEXT_RADIUS = 4; // lines before and after the usage line
+  const flags = parseFlags(rest);
+  const root = findTokenRoot(process.cwd()) || findRepoRoot(process.cwd()) || process.cwd();
+  const cat = readCatalog(root) || discoverCatalog(root);
+  if (!cat || Object.keys(cat.tokens || {}).length === 0) {
+    process.stderr.write('No catalog. Run /tokenize:init first.\n');
+    process.exit(2);
+  }
+
+  const baseline = flags.baseline ?? defaultBaseline();
+  const useChangedLines = flags.changedOnly !== false && !flags.fullRepo;
+  const changedLineMap = useChangedLines ? changedLineRanges(root, baseline) : null;
+  const files = useChangedLines
+    ? [...changedLineMap.keys()].map((p) => join(root, p))
+    : walkAllFiles(root);
+
+  const suppressions = readSuppressionsFile(flags.suppressions, root);
+  const tokensByName = cat.tokens;
+
+  /**
+   * @typedef {object} Usage
+   * @property {string} file        - repo-relative path
+   * @property {number} line        - 1-based
+   * @property {number} column      - 1-based
+   * @property {string} literal     - matched substring, e.g. "var(--color-text-danger)"
+   * @property {string} kind        - 'css-var' | 'js-tokens' | 'scss-var' | 'less-var'
+   * @property {string} tokenName   - dotted catalog name
+   * @property {string} tokenValue  - resolved value
+   * @property {string} tokenType   - 'color' | 'dimension' | etc.
+   * @property {string} [tokenDescription]
+   * @property {boolean} [tokenDeprecated]
+   * @property {string[]} context   - surrounding lines
+   * @property {number} contextStartLine - 1-based line number of context[0]
+   */
+  /** @type {Usage[]} */
+  const usages = [];
+  let totalScanned = 0;
+
+  for (const file of files) {
+    if (isExemptFile(file)) continue;
+    const surface = classifySurface(file);
+    if (!surface) continue;
+    if (suppressions.matches(file)) continue;
+    totalScanned++;
+    let content;
+    try { content = readFileSync(file, 'utf8'); }
+    catch { continue; }
+    const lines = content.split(/\r?\n/);
+    const changedLines = useChangedLines ? changedLineMap.get(relative(root, file)) : null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineNo = i + 1;
+      // In changed-only mode, only review usages on changed lines.
+      if (useChangedLines && changedLines && !changedLines.has(lineNo)) continue;
+      const text = lines[i];
+      for (const pat of TOKEN_REF_PATTERNS) {
+        if (!pat.surfaces.includes(surface)) continue;
+        pat.re.lastIndex = 0;
+        let m;
+        while ((m = pat.re.exec(text))) {
+          const tokenName = pat.toName(m);
+          const tok = tokensByName[tokenName];
+          if (!tok) continue; // not a known catalog token — ignore
+          const startLine = Math.max(0, i - REVIEW_CONTEXT_RADIUS);
+          const endLine = Math.min(lines.length, i + REVIEW_CONTEXT_RADIUS + 1);
+          usages.push({
+            file: relative(root, file),
+            line: lineNo,
+            column: m.index + 1,
+            literal: m[0],
+            kind: pat.kind,
+            tokenName,
+            tokenValue: tok.value,
+            tokenType: tok.type,
+            ...(tok.description ? { tokenDescription: tok.description } : {}),
+            ...(tok.deprecated ? { tokenDeprecated: true } : {}),
+            context: lines.slice(startLine, endLine),
+            contextStartLine: startLine + 1,
+          });
+        }
+      }
+    }
+  }
+
+  process.stdout.write(JSON.stringify({
+    mode: useChangedLines ? 'changed-only' : 'full-repo',
+    baseline: useChangedLines ? baseline : null,
+    filesScanned: totalScanned,
+    usagesFound: usages.length,
+    usages,
+  }, null, 2) + '\n');
+}
+
+// --------------------------------------------------------------------------------
 // shared
 // --------------------------------------------------------------------------------
 
@@ -663,6 +791,8 @@ function printUsage() {
     '  fix [<glob>]                           Apply exact-match rewrites in place',
     '  metrics                                Print session ledger',
     '  propose <value> "<intent>"             Queue a token proposal',
+    '  review-prep [--changed-only|--full-repo] [--baseline <ref>]',
+    '                                         Find token usages and emit JSON for the token-reviewer agent',
     '',
   ].join('\n'));
 }

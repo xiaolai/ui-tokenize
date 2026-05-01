@@ -282,7 +282,7 @@ Given the above expansions, v0.1 scope is reduced from the original M0–M4 plan
 | Audit: changed-lines gate, semantics-unchecked labels | **in v0.1** |
 | AST scanners (jsx, vue, svelte, astro, css-in-js full) | **v0.2** |
 | Daemon mode for sub-100ms latency | **v0.2** |
-| `token-reviewer` semantic-review subagent | **v0.2** |
+| `token-reviewer` semantic-review subagent | **shipped in v0.4** |
 | Multi-mode catalog (light/dark) | **v0.2** |
 | Monorepo multi-root scoping | **partial v0.1** (discovery walks up; full scope isolation v0.2) |
 | Native mobile / React Native | **v0.3+** |

@@ -11,7 +11,7 @@ Run the ui-tokenize audit. Default behavior is `--changed-only` against `origin/
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/commands/cli.mjs" audit $ARGUMENTS
    ```
-2. **Report the result to the user.** Surface the file/line/literal/suggestion list verbatim; do not paraphrase. Always carry forward the `semantics-unchecked` and `deprecation-unchecked` labels — a literal being replaced by a token does not mean the *right* token was used. If the user wants semantic verification, recommend the `token-reviewer` subagent (v0.2+).
+2. **Report the result to the user.** Surface the file/line/literal/suggestion list verbatim; do not paraphrase. Always carry forward the `semantics-unchecked` and `deprecation-unchecked` labels — a literal being replaced by a token does not mean the *right* token was used. If the user wants semantic verification, recommend `/tokenize:review`, which dispatches the `token-reviewer` subagent.
 3. **Honor the exit code.** Non-zero exit means violations were found; this command can be wired into CI directly.
 
 ## Output format
