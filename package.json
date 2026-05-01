@@ -1,6 +1,6 @@
 {
   "name": "ui-tokenize",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Block hardcoded UI values; enforce design tokens with rewrite-first hooks",
   "type": "module",
   "engines": {

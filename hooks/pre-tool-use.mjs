@@ -7,12 +7,12 @@
 import { readSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getCatalogSourceType, readCatalog } from '../lib/catalog.mjs';
-import { isExemptFile, scan } from '../lib/scanner.mjs';
+import { classifySurface, isExemptFile, scan } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
 import { renderToken, replaceAt } from '../lib/render.mjs';
 import { allowRewrite, denyWithSuggestions, hardStop } from '../lib/format.mjs';
 import { appendEvent, consecutiveDeniesFor } from '../lib/ledger.mjs';
-import { readConfig } from '../lib/config.mjs';
+import { isSurfaceAllowed, readConfig } from '../lib/config.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
 
 // D-019: deny-deny-deny → hard-stop. Three consecutive deny outcomes for the same file
@@ -60,6 +60,14 @@ if (sourceType) {
 
 if (isExemptFile(targetFile)) passthrough('exempt file');
 
+// Per-project surface allowlist (config.surfaces). Default null = scan all.
+// When the user narrows it, files outside the list pass through untouched —
+// no rewrite, no scan, no deny budget impact.
+const targetSurface = classifySurface(targetFile);
+if (config.surfaces !== null && !isSurfaceAllowed(targetSurface, config)) {
+  passthrough(`surface "${targetSurface}" not in config.surfaces`);
+}
+
 if (!catalog || Object.keys(catalog.tokens).length === 0) {
   emit(denyNoCatalog());
 }
@@ -72,7 +80,7 @@ const candidates = collectEditedContents(toolInput, toolName);
 const allReports = [];
 for (let i = 0; i < candidates.length; i++) {
   const c = candidates[i];
-  const violations = scan(c.content, targetFile, { tailwindDetected });
+  const violations = scan(c.content, targetFile, { tailwindDetected, allowedSurfaces: config.surfaces });
   for (const v of violations) {
     const result = suggest(v, catalog);
     const replacement = result.primary

@@ -67,7 +67,12 @@ Read `.tokenize/config.json` if present. Two independent fields shape behavior:
 - `strict` (default): exact-match rewrite + deny-with-suggestions on uncertain values; hard-stops after 3 consecutive denies on the same file in a session
 - `advisory`: exact-match rewrite + passthrough on uncertain values; PostToolUse surfaces residuals as `additionalContext` with nearest-token suggestions; no deny budget, no hard-stop
 
-The two fields compose. `strictness: advisory` does not weaken structural protections — direct edits to token-source files (e.g. `tokens.json`) remain denied in consumer mode regardless.
+`surfaces` — optional allowlist narrowing which file kinds the hook scans:
+
+- `null` or omitted (default): every recognized surface is scanned
+- Array of surface tags: only those surfaces are scanned. Recognized: `css`, `scss`, `less`, `tsx`, `ts`, `vue`, `svelte`, `astro`, `html`, `svg`. Unknown entries are dropped with a warning. Files outside the list pass through both PreToolUse and PostToolUse untouched — no rewrite, no scan, no findings.
+
+The fields compose. `strictness: advisory` does not weaken structural protections — direct edits to token-source files (e.g. `tokens.json`) remain denied in consumer mode regardless of `surfaces` or `strictness`.
 
 ## Recovery patterns
 

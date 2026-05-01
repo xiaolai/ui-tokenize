@@ -6,10 +6,11 @@ import { readSync, readFileSync, existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { discoverCatalog, isCatalogTokenSource, readCatalog, writeCatalog } from '../lib/catalog.mjs';
-import { isExemptFile, scan } from '../lib/scanner.mjs';
+import { classifySurface, isExemptFile, scan } from '../lib/scanner.mjs';
 import { suggest } from '../lib/suggester.mjs';
 import { renderToken } from '../lib/render.mjs';
 import { catalogUpdatedMessage, postToolReport } from '../lib/format.mjs';
+import { isSurfaceAllowed, readConfig } from '../lib/config.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
 
 const stdinBuf = readAllStdin();
@@ -44,6 +45,12 @@ if (isCatalogTokenSource(targetFile, oldCat)) {
 // Otherwise re-scan to surface residuals (catches anything PreToolUse let through).
 if (isExemptFile(targetFile)) exitNoOutput();
 
+// Honor the per-project surface allowlist before doing residual work.
+const config = readConfig(targetFile);
+if (config.disabled) exitNoOutput();
+const postSurface = classifySurface(targetFile);
+if (config.surfaces !== null && !isSurfaceAllowed(postSurface, config)) exitNoOutput();
+
 // Run external linters first (auto-fix only) if they're installed at the root.
 runExternalLinters(targetFile, root);
 
@@ -57,7 +64,7 @@ const profilePath = join(tokenizeDir(root), 'consumer-profile.json');
 const profile = existsSync(profilePath) ? JSON.parse(readFileSync(profilePath, 'utf8')) : undefined;
 const tailwindDetected = catalog.sources?.some((s) => s.type === 'tailwind') || false;
 
-const violations = scan(content, targetFile, { tailwindDetected });
+const violations = scan(content, targetFile, { tailwindDetected, allowedSurfaces: config.surfaces });
 if (violations.length === 0) exitNoOutput();
 
 const reports = violations.map((v) => {

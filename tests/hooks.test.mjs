@@ -543,3 +543,154 @@ test('PostToolUse advisory: residual literal in written file emits additionalCon
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// --------------------------------------------------------------------------------
+// Surfaces allowlist (config.surfaces)
+// --------------------------------------------------------------------------------
+
+function setupSurfacesProject(surfaces) {
+  const root = setupProject();
+  mkdirSync(join(root, '.tokenize'), { recursive: true });
+  writeFileSync(
+    join(root, '.tokenize', 'config.json'),
+    JSON.stringify({ surfaces }),
+  );
+  return root;
+}
+
+test('PreToolUse surfaces=["css"]: TSX edit passes through untouched', () => {
+  // surfaces narrows scanning to CSS only — TSX inline-style hex that would
+  // normally be rewritten must now reach disk verbatim.
+  const root = setupSurfacesProject(['css']);
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'A.tsx'),
+        content: '<div style={{ color: "#2563eb" }}>x</div>',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow');
+    // Crucial: content not rewritten — surface was filtered out, scan didn't run.
+    assert.equal(
+      out.hookSpecificOutput?.updatedInput,
+      undefined,
+      `expected no rewrite for filtered surface, got: ${JSON.stringify(out.hookSpecificOutput?.updatedInput)}`,
+    );
+    assert.ok(
+      /surface/i.test(out.hookSpecificOutput?.permissionDecisionReason || ''),
+      `expected surface-filtered reason, got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse surfaces=["css"]: CSS edit still rewrites exact match', () => {
+  const root = setupSurfacesProject(['css']);
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'a.css'),
+        content: '.btn { color: #2563eb; }',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow');
+    assert.ok(
+      out.hookSpecificOutput?.updatedInput?.content.includes('var(--color-primary)'),
+      `expected CSS to still be rewritten when surface in allowlist, got: ${JSON.stringify(out)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse surfaces=["css","scss"]: SCSS still scanned, TSX skipped', () => {
+  const root = setupSurfacesProject(['css', 'scss']);
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const tsxEvent = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'A.tsx'),
+        content: '<div style={{ color: "#2563eb" }}>x</div>',
+      },
+    };
+    const r1 = JSON.parse(runHook(PRE_TOOL_USE, tsxEvent, root).stdout);
+    assert.equal(r1.hookSpecificOutput?.updatedInput, undefined, 'TSX must not be rewritten');
+
+    const scssEvent = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'a.scss'),
+        content: '.btn { color: #2563eb; }',
+      },
+    };
+    const r2 = JSON.parse(runHook(PRE_TOOL_USE, scssEvent, root).stdout);
+    // SCSS surface renders the token as `$color-primary` (per renderToken/SCSS convention).
+    assert.ok(
+      r2.hookSpecificOutput?.updatedInput?.content.includes('$color-primary'),
+      `SCSS must still be rewritten, got: ${r2.hookSpecificOutput?.updatedInput?.content}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PostToolUse surfaces=["css"]: TSX residual literal does not surface a finding', () => {
+  const root = setupSurfacesProject(['css']);
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const file = join(root, 'src', 'B.tsx');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, '<div style={{ color: "#abcdef" }}>x</div>');
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: { file_path: file, content: '<div style={{ color: "#abcdef" }}>x</div>' },
+    };
+    const r = runHook(POST_TOOL_USE, event, root);
+    // Expect silent exit (stdout empty) — surface filtered out.
+    assert.equal(r.stdout.trim(), '', `expected no findings for filtered surface, got: ${r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('config.surfaces with unknown entry warns to stderr but accepts known ones', () => {
+  // Mixed list: 'css' is valid, 'cobol' isn't. The unknown one should be
+  // dropped with a stderr warning; CSS should still be scanned.
+  const root = setupSurfacesProject(['css', 'cobol']);
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'src', 'a.css'),
+        content: '.btn { color: #2563eb; }',
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.match(r.stderr, /unknown surface/i, `expected stderr warning, got: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.ok(
+      out.hookSpecificOutput?.updatedInput?.content.includes('var(--color-primary)'),
+      'CSS scanning must continue even when other surface entries are invalid',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

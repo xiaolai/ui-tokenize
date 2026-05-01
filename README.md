@@ -76,19 +76,48 @@ After `init`, every `Write`/`Edit`/`MultiEdit` from any agent in this project is
 
 Pick `strict` for mature design systems where you want every off-catalog value caught at write-time; pick `advisory` for onboarding projects with sparse catalogs where the deny path would fire too often. `strictness` does not weaken structural protections — direct edits to token-source files (`tokens.json`, catalog CSS files in consumer mode) remain denied in either setting.
 
+### Surfaces
+
+`.tokenize/config.json` `surfaces` is an allowlist of file kinds the hook will scan. By default (`null` or omitted) every recognized surface is scanned. Set it to an array to narrow scanning per project.
+
+```json
+{
+  "mode": "maintainer",
+  "strictness": "advisory",
+  "surfaces": ["css", "scss", "tsx"]
+}
+```
+
+Recognized values: `css`, `scss`, `less`, `tsx`, `ts`, `vue`, `svelte`, `astro`, `html`, `svg`. Files outside the list are ignored by both PreToolUse and PostToolUse — no rewrite, no scan, no deny budget impact, no findings. Unknown entries are dropped with a stderr warning; if every entry is unknown the config falls back to the default. An explicit empty list (`[]`) means "scan nothing" and is reported on stderr (use `"disabled": true` if that is the intent).
+
+When to narrow:
+
+| Situation | Suggested `surfaces` |
+| --- | --- |
+| Pure CSS-in-JS project; tokens are TS exports | `["ts", "tsx"]` |
+| Stylesheet-heavy project; styles never live in JSX | `["css", "scss"]` |
+| Static-site generator; only HTML and CSS | `["css", "html"]` |
+| Mixed React + CSS Modules; no Vue/Svelte/Astro to police | `["css", "scss", "tsx"]` |
+
+When in doubt, leave it unset — the default catches violations across the full surface area.
+
 ### Verify
 
 ```bash
 npm test
 ```
 
-Currently 147 / 147 passing.
+Currently 152 / 152 passing.
 
 ## Status
 
-v0.1.1 — pre-release. Regex-based scanners cover CSS, SCSS, LESS, JSX inline styles, Tailwind arbitrary brackets, SVG color attrs, and styled-components / emotion / vanilla-extract template literals (best-effort). Full AST coverage and daemon-mode latency follow in v0.2.
+v0.3.0 — pre-release. Regex-based scanners cover CSS, SCSS, LESS, JSX inline styles, Tailwind arbitrary brackets, SVG color attrs, and styled-components / emotion / vanilla-extract template literals (best-effort). `strictness: advisory` and per-project `surfaces` allowlist supported. Full AST coverage and daemon-mode latency follow in a later milestone.
 
 See `dev-docs/` for spec, interfaces, decisions log, and audit history.
+
+## Marketplace
+
+Part of the [xiaolai plugin marketplace](https://github.com/xiaolai/claude-plugin-marketplace).
 
 ## License
 
