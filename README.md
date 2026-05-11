@@ -1,5 +1,7 @@
 # ui-tokenize
 
+[![Validated by NLPM](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/xiaolai/ui-tokenize/main/nlpm-badge.json)](https://github.com/xiaolai/ui-tokenize/blob/main/nlpm-badge.json)
+
 A Claude Code plugin that blocks hardcoded UI values and enforces design tokens at the moment the agent writes them.
 
 ## What
