@@ -11,7 +11,7 @@ import { suggest } from '../lib/suggester.mjs';
 import { renderToken, replaceAt } from '../lib/render.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
 import { compactLedger, readSession } from '../lib/ledger.mjs';
-import { loadIgnore, globToRegExpStr } from '../lib/ignore.mjs';
+import { loadIgnore } from '../lib/ignore.mjs';
 import { camelizeFromIntent, nameFromIntent } from '../lib/proposal.mjs';
 import { atomicWriteJson, readJsonStrict } from '../lib/json-io.mjs';
 import { readConfig } from '../lib/config.mjs';
@@ -180,14 +180,17 @@ async function cmdAudit(rest) {
   const profile = readConsumerProfileFile(root);
   const tailwindDetected = cat.sources?.some((s) => s.type === 'tailwind') || false;
 
+  // One path-exclusion matcher for the whole run: config.ignore + .tokenize/ignore +
+  // .gitignore + hard defaults, with any --suppressions globs merged in as extras.
+  const ignore = loadIgnore(root, [...readConfig(root).ignore, ...readSuppressionGlobs(flags.suppressions, root)]);
+
   const baseline = flags.baseline ?? defaultBaseline();
   const useChangedLines = flags.changedOnly !== false && !flags.fullRepo;
   const changedLineMap = useChangedLines ? changedLineRanges(root, baseline) : null;
-  const files = useChangedLines
+  const files = (useChangedLines
     ? [...changedLineMap.keys()].map((p) => join(root, p))
-    : walkAllFiles(root);
-
-  const suppressions = readSuppressionsFile(flags.suppressions, root);
+    : walkAllFiles(root, ignore)
+  ).filter((f) => !ignore.isIgnored(f));
 
   /**
    * @typedef {object} Finding
@@ -204,7 +207,6 @@ async function cmdAudit(rest) {
   for (const file of files) {
     if (isExemptFile(file)) continue;
     if (!classifySurface(file)) continue;
-    if (suppressions.matches(file)) continue;
     totalScanned++;
     let content;
     try { content = readFileSync(file, 'utf8'); }
@@ -235,10 +237,10 @@ async function cmdAudit(rest) {
   }
 
   // Deprecation usage scan (v0.1: name-match only — no AST resolution).
-  const deprecatedFindings = flags.failOnDeprecated ? scanDeprecatedUsage(files, cat, root, suppressions) : [];
+  const deprecatedFindings = flags.failOnDeprecated ? scanDeprecatedUsage(files, cat, root) : [];
 
   // Coverage metric (trend only; never a gate).
-  const coverage = computeCoverage(files, suppressions);
+  const coverage = computeCoverage(files);
 
   if (flags.json) {
     process.stdout.write(JSON.stringify({
@@ -284,31 +286,22 @@ async function cmdAudit(rest) {
   if (shouldFail) process.exit(1);
 }
 
-function readSuppressionsFile(path, root) {
-  if (!path) return { matches: () => false };
+// A --suppressions file is just another source of ignore globs. We read its lines and
+// merge them into the single loadIgnore matcher (as `extra`), so suppressions share one
+// implementation and one semantics with config.ignore / .tokenize/ignore / .gitignore —
+// gaining gitignore negation (`!pattern`) and directory (`dir/`) support for free, and
+// applying consistently in both changed-only and full-repo modes.
+function readSuppressionGlobs(path, root) {
+  if (!path) return [];
   const abs = resolve(root, path);
-  if (!existsSync(abs)) return { matches: () => false };
+  if (!existsSync(abs)) return [];
   let lines;
   try { lines = readFileSync(abs, 'utf8').split(/\r?\n/); }
-  catch { return { matches: () => false }; }
-  const patterns = lines
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'))
-    .map((raw) => {
-      let p = raw;
-      let rooted = false;
-      if (p.startsWith('/')) { rooted = true; p = p.slice(1); }
-      return new RegExp(globToRegExpStr(p, rooted, false));
-    });
-  return {
-    matches(file) {
-      const rel = relative(root, file).replace(/\\/g, '/');
-      return patterns.some((re) => re.test(rel));
-    },
-  };
+  catch { return []; }
+  return lines.map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 }
 
-function scanDeprecatedUsage(files, cat, root, suppressions) {
+function scanDeprecatedUsage(files, cat, root) {
   const deprecated = Object.values(cat.tokens || {}).filter((t) => t.deprecated);
   if (deprecated.length === 0) return [];
   /** @type {Array<{file: string, line: number, token: string, replacement?: string}>} */
@@ -316,7 +309,6 @@ function scanDeprecatedUsage(files, cat, root, suppressions) {
   for (const file of files) {
     if (isExemptFile(file)) continue;
     if (!classifySurface(file)) continue;
-    if (suppressions.matches(file)) continue;
     let content;
     try { content = readFileSync(file, 'utf8'); }
     catch { continue; }
@@ -349,13 +341,12 @@ function extractReplacementHint(desc) {
  * Trend coverage metric: count CSS-style declarations using tokens vs literals.
  * Indicative only; the disclaimer in the audit output makes this clear.
  */
-function computeCoverage(files, suppressions) {
+function computeCoverage(files) {
   const declRe = /(?:color|background(?:-color)?|fill|stroke|padding(?:-\w+)?|margin(?:-\w+)?|gap|border-radius|font-size|width|height)\s*:\s*([^;]+);/g;
   let total = 0, tokenized = 0;
   for (const file of files) {
     if (isExemptFile(file)) continue;
     if (!classifySurface(file)) continue;
-    if (suppressions.matches(file)) continue;
     let content;
     try { content = readFileSync(file, 'utf8'); }
     catch { continue; }
@@ -453,10 +444,9 @@ function changedLineRanges(root, baseline) {
   return out;
 }
 
-function walkAllFiles(root) {
+function walkAllFiles(root, ignore) {
   /** @type {string[]} */
   const out = [];
-  const ignore = loadIgnore(root, readConfig(root).ignore);
   walkDir(root, root, out, ignore);
   return out;
 }
@@ -488,16 +478,16 @@ async function cmdFix(rest) {
   const cat = readCatalog(root) || discoverCatalog(root);
   const profile = readConsumerProfileFile(root);
   const tailwindDetected = cat.sources?.some((s) => s.type === 'tailwind') || false;
+  const ignore = loadIgnore(root, [...readConfig(root).ignore, ...readSuppressionGlobs(flags.suppressions, root)]);
   const glob = rest.find((a) => !a.startsWith('--'));
-  const files = glob ? expandGlob(glob, root) : walkAllFiles(root);
-  const suppressions = readSuppressionsFile(flags.suppressions, root);
+  const files = (glob ? expandGlob(glob, root, ignore) : walkAllFiles(root, ignore))
+    .filter((f) => !ignore.isIgnored(f));
 
   let modifiedCount = 0;
   let replacementCount = 0;
   for (const file of files) {
     if (isExemptFile(file)) continue;
     if (!classifySurface(file)) continue;
-    if (suppressions.matches(file)) continue;
     let content;
     try { content = readFileSync(file, 'utf8'); }
     catch { continue; }
@@ -525,14 +515,13 @@ async function cmdFix(rest) {
   log(`Done. ${replacementCount} exact-match rewrite(s) across ${modifiedCount} file(s).`);
 }
 
-function expandGlob(pattern, root) {
+function expandGlob(pattern, root, ignore) {
   // Minimal glob: full path, directory, or simple wildcard. For richer globs, document `find` usage.
   const path = resolve(root, pattern);
   if (existsSync(path)) {
     const stats = statSyncSafe(path);
     if (stats?.isDirectory()) {
       const out = [];
-      const ignore = loadIgnore(root, readConfig(root).ignore);
       walkDir(path, root, out, ignore);
       return out;
     }
@@ -654,11 +643,13 @@ async function cmdReviewPrep(rest) {
   const baseline = flags.baseline ?? defaultBaseline();
   const useChangedLines = flags.changedOnly !== false && !flags.fullRepo;
   const changedLineMap = useChangedLines ? changedLineRanges(root, baseline) : null;
-  const files = useChangedLines
+  // Same unified path-exclusion matcher as audit/fix (config + suppressions merged).
+  const ignore = loadIgnore(root, [...readConfig(root).ignore, ...readSuppressionGlobs(flags.suppressions, root)]);
+  const files = (useChangedLines
     ? [...changedLineMap.keys()].map((p) => join(root, p))
-    : walkAllFiles(root);
+    : walkAllFiles(root, ignore)
+  ).filter((f) => !ignore.isIgnored(f));
 
-  const suppressions = readSuppressionsFile(flags.suppressions, root);
   const tokensByName = cat.tokens;
 
   /**
@@ -684,7 +675,6 @@ async function cmdReviewPrep(rest) {
     if (isExemptFile(file)) continue;
     const surface = classifySurface(file);
     if (!surface) continue;
-    if (suppressions.matches(file)) continue;
     totalScanned++;
     let content;
     try { content = readFileSync(file, 'utf8'); }

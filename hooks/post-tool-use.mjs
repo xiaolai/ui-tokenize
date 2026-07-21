@@ -12,6 +12,7 @@ import { renderToken } from '../lib/render.mjs';
 import { catalogUpdatedMessage, postToolReport } from '../lib/format.mjs';
 import { isSurfaceAllowed, readConfig } from '../lib/config.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
+import { loadIgnore } from '../lib/ignore.mjs';
 
 const stdinBuf = readAllStdin();
 let event;
@@ -26,6 +27,14 @@ if (!targetFile) exitNoOutput();
 
 const root = findTokenRoot(targetFile) || findRepoRoot(targetFile) || process.cwd();
 const oldCat = readCatalog(root);
+const config = readConfig(targetFile);
+
+// Path ignores: same matcher as PreToolUse, the audit, and catalog discovery
+// (config.ignore + .tokenize/ignore + .gitignore + hard defaults like node_modules/,
+// dist/, build/). An ignored path is fully out of scope — skip catalog-update deltas
+// and residual scanning alike.
+const ignore = loadIgnore(root, config.ignore);
+if (ignore.isIgnored(targetFile)) exitNoOutput();
 
 // If ANY discovered token source was edited (DTCG json OR a CSS file with :root vars),
 // re-discover and emit catalog-update delta.
@@ -46,7 +55,6 @@ if (isCatalogTokenSource(targetFile, oldCat)) {
 if (isExemptFile(targetFile)) exitNoOutput();
 
 // Honor the per-project surface allowlist before doing residual work.
-const config = readConfig(targetFile);
 if (config.disabled) exitNoOutput();
 const postSurface = classifySurface(targetFile);
 if (config.surfaces !== null && !isSurfaceAllowed(postSurface, config)) exitNoOutput();

@@ -72,7 +72,14 @@ Read `.tokenize/config.json` if present. Two independent fields shape behavior:
 - `null` or omitted (default): every recognized surface is scanned
 - Array of surface tags: only those surfaces are scanned. Recognized: `css`, `scss`, `less`, `tsx`, `ts`, `vue`, `svelte`, `astro`, `html`, `svg`. Unknown entries are dropped with a warning. Files outside the list pass through both PreToolUse and PostToolUse untouched — no rewrite, no scan, no findings.
 
-The fields compose. `strictness: advisory` does not weaken structural protections — direct edits to token-source files (e.g. `tokens.json`) remain denied in consumer mode regardless of `surfaces` or `strictness`.
+`ignore` — optional list of path globs excluded from the plugin entirely:
+
+- `[]` or omitted (default): only the built-in hard defaults are excluded — `node_modules/`, `dist/`, `build/`, `.next/`, `.turbo/`, `coverage/`, `.tokenize/`, `*.lock` — plus anything in the project's `.gitignore` and `.tokenize/ignore`.
+- Array of gitignore-style globs (e.g. `["vendor/", "fixtures/", "**/*.stories.tsx"]`): those paths are added to the exclusion set.
+
+An excluded path is fully out of scope — no rewrite, no deny, no residual finding, and not even the token-source structural deny. This is the same exclusion vocabulary `/tokenize:audit`, `/tokenize:fix`, and catalog discovery use, so a path the audit skips the hook skips too. The `--suppressions <file>` flag on `/tokenize:audit` and `/tokenize:fix` feeds extra globs into this same matcher for a single run — it accepts the full gitignore vocabulary (`dir/` directory patterns, `!negation`), identical to `.tokenize/ignore`. Reach for `ignore` for test fixtures with intentional literals, generated or vendored code, and example snippets. `surfaces` narrows by file *kind*; `ignore` narrows by *path* — they compose.
+
+The fields compose. `strictness: advisory` does not weaken structural protections — direct edits to token-source files (e.g. `tokens.json`) remain denied in consumer mode regardless of `surfaces` or `strictness` (unless the file's path is excluded via `ignore`, which takes it out of scope completely).
 
 ## Recovery patterns
 

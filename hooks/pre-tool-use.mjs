@@ -14,6 +14,7 @@ import { allowRewrite, denyWithSuggestions, hardStop } from '../lib/format.mjs';
 import { appendEvent, consecutiveDeniesFor } from '../lib/ledger.mjs';
 import { isSurfaceAllowed, readConfig } from '../lib/config.mjs';
 import { findRepoRoot, findTokenRoot, tokenizeDir } from '../lib/paths.mjs';
+import { loadIgnore } from '../lib/ignore.mjs';
 
 // D-019: deny-deny-deny → hard-stop. Three consecutive deny outcomes for the same file
 // in the current session before this PreToolUse triggers HARD_STOP. Resolved by any
@@ -36,6 +37,15 @@ if (!targetFile) passthrough('no resolvable file path');
 const root = findTokenRoot(targetFile) || findRepoRoot(targetFile) || process.cwd();
 const config = readConfig(targetFile);
 if (config.disabled) passthrough('plugin disabled in config');
+
+// Per-project path ignores: the SAME matcher catalog discovery and the audit use
+// (config.ignore + .tokenize/ignore + .gitignore + hard defaults like node_modules/,
+// dist/, build/, coverage/). A path the audit skips, the hook skips too. Checked
+// before every other gate so an ignored path is fully out of scope — no rewrite, no
+// deny, not even the token-source structural deny — mirroring the fact that discovery
+// never indexes an ignored file as a token source in the first place.
+const ignore = loadIgnore(root, config.ignore);
+if (ignore.isIgnored(targetFile)) passthrough('ignored path');
 
 // Block direct edits to ANY discovered token source (DTCG JSON, CSS root vars, etc.)
 // BEFORE the exempt-file check (which would otherwise pass-through tokens.json as a
@@ -68,9 +78,13 @@ if (config.surfaces !== null && !isSurfaceAllowed(targetSurface, config)) {
   passthrough(`surface "${targetSurface}" not in config.surfaces`);
 }
 
-if (!catalog || Object.keys(catalog.tokens).length === 0) {
-  emit(denyNoCatalog());
-}
+// Empty or absent catalog: no tokens exist to match against yet. We must NOT
+// blanket-deny here. NFR-SAFETY-2 / AC-13 require that we never *silently* allow a
+// violation — but a write with no hardcoded UI literals is not a violation, so it has
+// to pass through like any clean write. (The old pre-scan deny blocked docs, JSON,
+// and prose that contained nothing to tokenize.) The decision is deferred until after
+// the scan below, where we know whether the write actually introduces literals.
+const catalogEmpty = !catalog || Object.keys(catalog.tokens || {}).length === 0;
 
 const profile = readConsumerProfile(root);
 const tailwindDetected = catalog?.sources?.some((s) => s.type === 'tailwind') || false;
@@ -82,7 +96,9 @@ for (let i = 0; i < candidates.length; i++) {
   const c = candidates[i];
   const violations = scan(c.content, targetFile, { tailwindDetected, allowedSurfaces: config.surfaces });
   for (const v of violations) {
-    const result = suggest(v, catalog);
+    // An empty catalog can't match anything (and suggest() would dereference a null
+    // catalog); treat every literal as unmatched in that case.
+    const result = catalogEmpty ? { primary: null, alternates: [] } : suggest(v, catalog);
     const replacement = result.primary
       ? renderToken(result.primary.tokenName, v.surface, profile, v)
       : null;
@@ -101,7 +117,21 @@ for (let i = 0; i < candidates.length; i++) {
 if (allReports.length === 0) {
   // No violations — successful outcome resets the budget for this file/session.
   appendEvent(targetFile, { kind: 'resolve', sessionId, file: targetFile });
-  passthrough('no violations');
+  passthrough(catalogEmpty ? 'no violations (no catalog yet)' : 'no violations');
+}
+
+const isAdvisory = config.strictness === 'advisory';
+
+// Empty/absent catalog with real violations: nothing to rewrite and nothing to
+// suggest. Advisory mode lets the write land — PostToolUse re-scans and surfaces the
+// residual literals, so they are never *silently* allowed. Strict mode blocks with an
+// explicit, actionable message (NFR-SAFETY-2 / AC-13). Reaching here means the write
+// actually contains hardcoded UI values; literal-free writes already passed through.
+if (catalogEmpty) {
+  if (isAdvisory) {
+    passthrough(`advisory mode: ${allReports.length} literal(s) with no catalog yet; see PostToolUse for findings`);
+  }
+  emit(denyNoCatalog());
 }
 
 // Partition: confidence-1.0 with a rendered replacement = rewrite; everything else = deny.
@@ -109,8 +139,6 @@ const rewrites = allReports.filter((x) =>
   x.report.primary && x.report.primary.confidence === 1.0 && x.report.renderedReplacement,
 );
 const denies = allReports.filter((x) => !rewrites.includes(x));
-
-const isAdvisory = config.strictness === 'advisory';
 
 // Apply rewrites whenever possible:
 //   - strict mode: only when there are no co-existing uncertain literals (mixed → deny)
@@ -319,7 +347,7 @@ function denyNoCatalog() {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: `[ui-tokenize] No design-token catalog found.\n\nRun /tokenize:init to scaffold one (or /tokenize:init --starter shadcn|material for a curated starter). The plugin cannot suggest replacements until tokens exist.\n\nFor each individual value you want to keep but tokenize, call MCP tool tokenize__propose(value, intent).`,
+      permissionDecisionReason: `[ui-tokenize] This write introduces hardcoded UI value(s), but no design tokens are defined yet — so none can be suggested.\n\nSeed a catalog with /tokenize:init --starter shadcn|material (curated set) or /tokenize:init (discover an existing token source). For a single value you want to keep and tokenize right now, call MCP tool tokenize__propose(value, intent) and use the temporary __proposed.* name it returns.\n\nOnly writes that contain hardcoded UI values are blocked; files with no such literals pass through untouched. Set "strictness": "advisory" in .tokenize/config.json to let these land and surface as non-blocking PostToolUse findings instead.`,
     },
   };
 }

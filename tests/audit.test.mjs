@@ -102,6 +102,25 @@ test('audit --suppressions skips matched files', () => {
   }
 });
 
+// Unification regression: --suppressions now goes through the same loadIgnore matcher
+// as config.ignore / .gitignore, so it understands gitignore *directory* patterns
+// (`vendor/`). The old bespoke suppressions matcher passed dirOnly=false and silently
+// failed to match files *inside* a `dir/` pattern — this asserts the upgraded semantics.
+test('audit --suppressions honors gitignore directory patterns (dir/)', () => {
+  const root = setup();
+  try {
+    mkdirSync(join(root, 'vendor'), { recursive: true });
+    writeFileSync(join(root, 'vendor', 'b.css'), '.z { color: #00ff00; }\n');
+    // Suppress the pre-existing a.css AND the whole vendor/ directory.
+    writeFileSync(join(root, '.tokenize-suppress'), 'a.css\nvendor/\n');
+    const r = runCli(['audit', '--full-repo', '--suppressions', '.tokenize-suppress'], root);
+    assert.equal(r.status, 0, `dir suppression should skip vendor/b.css; stdout: ${r.stdout}, stderr: ${r.stderr}`);
+    assert.ok(!r.stdout.includes('#00ff00'), `vendor/b.css must be suppressed, got: ${r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('audit reports coverage metric in default output', () => {
   const root = setup();
   try {

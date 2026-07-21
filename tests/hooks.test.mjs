@@ -393,6 +393,272 @@ test('PreToolUse: tokens.json source still denies direct Write in maintainer mod
 });
 
 // --------------------------------------------------------------------------------
+// Empty / absent catalog (regression: blanket-deny blocked all writes)
+// --------------------------------------------------------------------------------
+//
+// `/tokenize:init` without a starter scaffolds `{ "$schema": ... }` — zero tokens.
+// The old hook denied *every* non-exempt write in that state (before scanning), which
+// blocked docs, JSON, and prose that contained nothing to tokenize. The catalog being
+// empty must only matter for writes that actually introduce hardcoded UI literals.
+
+function setupEmptyCatalogProject({ strictness } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'ui-tokenize-empty-'));
+  writeFileSync(join(root, 'package.json'), '{"name":"empty-sample"}');
+  // Exactly what `/tokenize:init` scaffolds without a starter: schema only, no tokens.
+  writeFileSync(join(root, 'tokens.json'), JSON.stringify({
+    $schema: 'https://design-tokens.github.io/community-group/schemas/format/',
+  }));
+  if (strictness) {
+    mkdirSync(join(root, '.tokenize'), { recursive: true });
+    writeFileSync(join(root, '.tokenize', 'config.json'), JSON.stringify({ strictness }));
+  }
+  return root;
+}
+
+test('PreToolUse empty catalog: literal-free surface file passes through', () => {
+  const root = setupEmptyCatalogProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: { file_path: join(root, 'src', 'layout.css'), content: '.btn { display: flex; }' },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(
+      out.hookSpecificOutput?.permissionDecision,
+      'allow',
+      `empty catalog must not block a literal-free write; got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse empty catalog: non-surface files (md, json) pass through', () => {
+  const root = setupEmptyCatalogProject();
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const cases = [
+      [join(root, 'docs', 'minute.md'), '# Minute\n\nDecision: ship it.'],
+      [join(root, 'data', 'bureau.json'), '{"status":"open"}'],
+    ];
+    for (const [file, content] of cases) {
+      const r = runHook(PRE_TOOL_USE, {
+        session_id: 's1',
+        tool_name: 'Write',
+        tool_input: { file_path: file, content },
+      }, root);
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      const out = JSON.parse(r.stdout);
+      assert.equal(
+        out.hookSpecificOutput?.permissionDecision,
+        'allow',
+        `non-surface file ${file} must pass through under empty catalog; got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse empty catalog strict: a literal-bearing write is blocked with an explicit message', () => {
+  const root = setupEmptyCatalogProject(); // default strict
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: { file_path: join(root, 'src', 'c.css'), content: '.btn { color: #123456; }' },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'deny');
+    const reason = out.hookSpecificOutput?.permissionDecisionReason || '';
+    assert.ok(
+      /no design tokens are defined yet/.test(reason) && /tokenize__propose/.test(reason),
+      `expected explicit no-tokens-yet message, got: ${reason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse empty catalog advisory: a literal-bearing write passes through (no deny)', () => {
+  const root = setupEmptyCatalogProject({ strictness: 'advisory' });
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: { file_path: join(root, 'src', 'd.css'), content: '.btn { color: #123456; }' },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(
+      out.hookSpecificOutput?.permissionDecision,
+      'allow',
+      `advisory + empty catalog must not deny; got: ${JSON.stringify(out.hookSpecificOutput)}`,
+    );
+    assert.ok(
+      /advisory/i.test(out.hookSpecificOutput?.permissionDecisionReason || ''),
+      `expected advisory reason, got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --------------------------------------------------------------------------------
+// Path ignores (config.ignore + .tokenize/ignore + .gitignore + hard defaults)
+// --------------------------------------------------------------------------------
+//
+// The hooks now consult the same loadIgnore matcher the audit and catalog discovery
+// use. An ignored path is fully out of scope: no rewrite, no deny, no residual finding,
+// not even the token-source structural deny.
+
+function setupIgnoreProject(ignore) {
+  const root = setupProject(); // populated catalog — exact matches would normally rewrite
+  mkdirSync(join(root, '.tokenize'), { recursive: true });
+  writeFileSync(
+    join(root, '.tokenize', 'config.json'),
+    JSON.stringify(ignore === undefined ? {} : { ignore }),
+  );
+  return root;
+}
+
+test('PreToolUse: hard-default path (node_modules/) passes through unrewritten', () => {
+  const root = setupIgnoreProject(); // no explicit ignore — relies on hard defaults
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const event = {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'node_modules', 'pkg', 'styles.css'),
+        content: '.btn { color: #2563eb; }', // exact match for color.primary
+      },
+    };
+    const r = runHook(PRE_TOOL_USE, event, root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow');
+    assert.equal(
+      out.hookSpecificOutput?.updatedInput,
+      undefined,
+      `ignored path must NOT be rewritten; got: ${JSON.stringify(out.hookSpecificOutput?.updatedInput)}`,
+    );
+    assert.ok(
+      /ignored path/i.test(out.hookSpecificOutput?.permissionDecisionReason || ''),
+      `expected ignored-path reason, got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse: config.ignore glob excludes a path; a sibling still rewrites', () => {
+  const root = setupIgnoreProject(['vendor/']);
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    // Ignored: vendor/theme.css — verbatim.
+    const ignored = runHook(PRE_TOOL_USE, {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: { file_path: join(root, 'vendor', 'theme.css'), content: '.btn { color: #2563eb; }' },
+    }, root);
+    const ignoredOut = JSON.parse(ignored.stdout);
+    assert.equal(ignoredOut.hookSpecificOutput?.permissionDecision, 'allow');
+    assert.equal(ignoredOut.hookSpecificOutput?.updatedInput, undefined, 'ignored path must not be rewritten');
+
+    // Not ignored: src/theme.css — still rewritten, proving the ignore is path-scoped.
+    const active = runHook(PRE_TOOL_USE, {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: { file_path: join(root, 'src', 'theme.css'), content: '.btn { color: #2563eb; }' },
+    }, root);
+    const activeOut = JSON.parse(active.stdout);
+    assert.equal(activeOut.hookSpecificOutput?.permissionDecision, 'allow');
+    assert.ok(
+      activeOut.hookSpecificOutput?.updatedInput?.content.includes('var(--color-primary)'),
+      `non-ignored sibling must still rewrite, got: ${JSON.stringify(activeOut.hookSpecificOutput?.updatedInput)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse: .tokenize/ignore file glob excludes a path', () => {
+  const root = setupIgnoreProject();
+  try {
+    writeFileSync(join(root, '.tokenize', 'ignore'), '# legacy styles, mid-migration\nlegacy/\n');
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const r = runHook(PRE_TOOL_USE, {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: { file_path: join(root, 'legacy', 'old.css'), content: '.btn { color: #2563eb; }' },
+    }, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput?.permissionDecision, 'allow');
+    assert.equal(out.hookSpecificOutput?.updatedInput, undefined, 'legacy/ path must not be rewritten');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreToolUse: an ignored token-source file is NOT denied (ignore precedes structural deny)', () => {
+  // A tokens.json under an ignored path is a fixture, not the live catalog — discovery
+  // never indexes it, so the token-source structural deny would be pure obstruction.
+  const root = setupIgnoreProject(['fixtures/']);
+  try {
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const r = runHook(PRE_TOOL_USE, {
+      session_id: 's1',
+      tool_name: 'Write',
+      tool_input: {
+        file_path: join(root, 'fixtures', 'tokens.json'),
+        content: '{"color":{"x":{"$value":"#0f0","$type":"color"}}}',
+      },
+    }, root);
+    const out = JSON.parse(r.stdout);
+    assert.equal(
+      out.hookSpecificOutput?.permissionDecision,
+      'allow',
+      `ignored token-source must pass through, not hit the structural deny; got: ${out.hookSpecificOutput?.permissionDecisionReason}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PostToolUse: residual literal on an ignored path surfaces no finding', () => {
+  const root = setupProject();
+  try {
+    mkdirSync(join(root, '.tokenize'), { recursive: true });
+    // advisory so PostToolUse would normally surface a residual finding.
+    writeFileSync(
+      join(root, '.tokenize', 'config.json'),
+      JSON.stringify({ strictness: 'advisory', ignore: ['vendor/'] }),
+    );
+    runHook(SESSION_START, { session_id: 's1', cwd: root }, root);
+    const file = join(root, 'vendor', 'legacy.css');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, '.btn { color: #2462ea; }'); // near-miss residual
+    const r = runHook(POST_TOOL_USE, {
+      tool_name: 'Write',
+      tool_input: { file_path: file, content: '.btn { color: #2462ea; }' },
+    }, root);
+    assert.equal(r.stdout.trim(), '', `ignored path must surface no residual finding, got: ${r.stdout}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --------------------------------------------------------------------------------
 // Advisory mode (strictness: 'advisory')
 // --------------------------------------------------------------------------------
 
