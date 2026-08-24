@@ -4,6 +4,9 @@
   "owner": {
     "name": "xiaolai"
   },
+  "metadata": {
+    "description": "ui-tokenize — block hardcoded UI values and enforce design tokens, by xiaolai"
+  },
   "plugins": [
     {
       "name": "ui-tokenize",
