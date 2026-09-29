@@ -1,6 +1,7 @@
 ---
 name: token-reviewer
-description: Use this agent when the user asks "is this token semantically correct", "is this token the right one", "review my token usages", "check if I'm using the right token", "audit token semantics", "find semantic mis-picks", or after a `/tokenize:audit` run when they want to verify that tokenized literals were replaced with the *right* token (not just *a* token). This is the semantic-review counterpart to the deterministic audit — audit checks that no hardcoded literals remain; this agent checks that the chosen tokens fit their context. Examples:
+description: |
+  Use this agent when the user asks "is this token semantically correct", "is this token the right one", "review my token usages", "check if I'm using the right token", "audit token semantics", "find semantic mis-picks", or after a `/tokenize:audit` run when they want to verify that tokenized literals were replaced with the *right* token (not just *a* token). This is the semantic-review counterpart to the deterministic audit — audit checks that no hardcoded literals remain; this agent checks that the chosen tokens fit their context. Examples:
 
   <example>
   Context: User just ran the audit and it returned 0 findings, but they want to verify token choices are semantically correct.
@@ -28,7 +29,6 @@ description: Use this agent when the user asks "is this token semantically corre
   Full-repo focus — slower, useful for periodic audits or onboarding to a new codebase.
   </commentary>
   </example>
-
 model: sonnet
 color: cyan
 tools: Read, Bash, Grep, Glob
