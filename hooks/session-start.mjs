@@ -70,7 +70,7 @@ function formatInjection(cat, prof, projectRoot) {
       '# ui-tokenize',
       '',
       `No design tokens were discovered in ${projectRoot}.`,
-      'Run /tokenize:init to scaffold a token system, or /tokenize:init --starter shadcn for a curated set.',
+      'Run /ui-tokenize:init to scaffold a token system, or /ui-tokenize:init --starter shadcn for a curated set.',
       'Until tokens exist, hardcoded UI values cannot be auto-rewritten.',
     ].join('\n');
   }

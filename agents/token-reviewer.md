@@ -1,7 +1,7 @@
 ---
 name: token-reviewer
 description: |
-  Use this agent when the user asks "is this token semantically correct", "is this token the right one", "review my token usages", "check if I'm using the right token", "audit token semantics", "find semantic mis-picks", or after a `/tokenize:audit` run when they want to verify that tokenized literals were replaced with the *right* token (not just *a* token). This is the semantic-review counterpart to the deterministic audit — audit checks that no hardcoded literals remain; this agent checks that the chosen tokens fit their context. Examples:
+  Use this agent when the user asks "is this token semantically correct", "is this token the right one", "review my token usages", "check if I'm using the right token", "audit token semantics", "find semantic mis-picks", or after a `/ui-tokenize:audit` run when they want to verify that tokenized literals were replaced with the *right* token (not just *a* token). This is the semantic-review counterpart to the deterministic audit — audit checks that no hardcoded literals remain; this agent checks that the chosen tokens fit their context. Examples:
 
   <example>
   Context: User just ran the audit and it returned 0 findings, but they want to verify token choices are semantically correct.
@@ -49,7 +49,7 @@ The user's slash command will pass arguments such as `--changed-only`, `--full-r
 Run the deterministic finder to get a JSON list of every catalog-resolved token usage in scope:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/commands/cli.mjs review-prep $ARGUMENTS
+node "${CLAUDE_PLUGIN_ROOT}/commands/cli.mjs" review-prep $ARGUMENTS
 ```
 
 The output is a single JSON object:
@@ -99,6 +99,8 @@ When deciding, weight these signals:
 - **Surrounding code (the `context` lines)**: component name, class names, comments, neighboring text content, accessibility attributes (`aria-label`, `role`).
 - **Deprecation**: any usage of a deprecated token is at minimum `unclear` and usually `mis-pick`. Note the deprecation reason from the description if present.
 
+When the `context` lines are too thin to decide, gather more before settling on `unclear`: Read the file around `contextStartLine`, Grep for the component or class name the usage sits in, or Glob for that component's definition file. Mark `unclear` only if the meaning is still ambiguous after that.
+
 Do **not** flag:
 - Cosmetic preference (e.g. "I'd have used `color.muted` instead of `color.text.secondary`") unless the chosen token is *wrong* for the context, not just suboptimal.
 - Tokens whose name is generic (`color.brand.primary`, `space.4`) and whose context doesn't conflict with anything generic.
@@ -134,7 +136,7 @@ If `tokenDeprecated` is set on any usage, surface it explicitly in the verdict r
 ## Important constraints
 
 - **You do not modify files.** The user (or a human reviewer) decides which `mis-pick` recommendations to apply. Do not invoke `Edit`, `Write`, or any of the `tokenize__*` MCP tools that mutate state.
-- **Do not propose new tokens.** That belongs to `/tokenize:propose`. Your job is to evaluate existing usage.
+- **Do not propose new tokens.** That belongs to `/ui-tokenize:propose`. Your job is to evaluate existing usage.
 - **Cite evidence inline.** Every `mis-pick` verdict must reference a specific line of context as the reason. Verdicts without evidence are noise.
 - **Ignore the catalog itself.** Token *definitions* in `tokens.json` or `theme.css` are not "usages" — review-prep filters them out, but if anything slips through, treat the file as the source of truth and skip it.
 - **Be calibrated.** Most token usages in a working codebase are correct. If you flag more than ~15% of usages on a normal change-set, you are over-firing — re-read your verdicts and demote weak ones to `correct`.

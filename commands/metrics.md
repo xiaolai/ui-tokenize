@@ -12,7 +12,7 @@ Compact the per-PID NDJSON ledger and print the resulting session metrics.
    ```
    This compacts the per-PID NDJSON files into the canonical `session.json` first, then reads it.
 2. **Surface the report to the user verbatim** using the format below. Do not paraphrase the counts; the user uses these numbers to judge whether the catalog needs more tokens.
-3. **Interpret signals.** A high `escapesToProposal` count or repeated fabrications indicate the catalog is missing tokens for the values the agent keeps trying to use; recommend `/tokenize:propose` (or direct `tokenize__propose` MCP calls) to close the gap.
+3. **Interpret signals.** A high `escapesToProposal` count or repeated fabrications indicate the catalog is missing tokens for the values the agent keeps trying to use; recommend `/ui-tokenize:propose` (or direct `tokenize__propose` MCP calls) to close the gap.
 
 ## Output format
 

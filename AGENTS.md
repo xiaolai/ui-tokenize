@@ -23,7 +23,7 @@ claude plugin install ui-tokenize@xiaolai --scope project
 Then in that project, bootstrap the catalog once:
 
 ```bash
-/tokenize:init
+/ui-tokenize:init
 ```
 
 ## Verify
@@ -77,7 +77,7 @@ Read `.tokenize/config.json` if present. Two independent fields shape behavior:
 - `[]` or omitted (default): only the built-in hard defaults are excluded — `node_modules/`, `dist/`, `build/`, `.next/`, `.turbo/`, `coverage/`, `.tokenize/`, `*.lock` — plus anything in the project's `.gitignore` and `.tokenize/ignore`.
 - Array of gitignore-style globs (e.g. `["vendor/", "fixtures/", "**/*.stories.tsx"]`): those paths are added to the exclusion set.
 
-An excluded path is fully out of scope — no rewrite, no deny, no residual finding, and not even the token-source structural deny. This is the same exclusion vocabulary `/tokenize:audit`, `/tokenize:fix`, and catalog discovery use, so a path the audit skips the hook skips too. The `--suppressions <file>` flag on `/tokenize:audit` and `/tokenize:fix` feeds extra globs into this same matcher for a single run — it accepts the full gitignore vocabulary (`dir/` directory patterns, `!negation`), identical to `.tokenize/ignore`. Reach for `ignore` for test fixtures with intentional literals, generated or vendored code, and example snippets. `surfaces` narrows by file *kind*; `ignore` narrows by *path* — they compose.
+An excluded path is fully out of scope — no rewrite, no deny, no residual finding, and not even the token-source structural deny. This is the same exclusion vocabulary `/ui-tokenize:audit`, `/ui-tokenize:fix`, and catalog discovery use, so a path the audit skips the hook skips too. The `--suppressions <file>` flag on `/ui-tokenize:audit` and `/ui-tokenize:fix` feeds extra globs into this same matcher for a single run — it accepts the full gitignore vocabulary (`dir/` directory patterns, `!negation`), identical to `.tokenize/ignore`. Reach for `ignore` for test fixtures with intentional literals, generated or vendored code, and example snippets. `surfaces` narrows by file *kind*; `ignore` narrows by *path* — they compose.
 
 The fields compose. `strictness: advisory` does not weaken structural protections — direct edits to token-source files (e.g. `tokens.json`) remain denied in consumer mode regardless of `surfaces` or `strictness` (unless the file's path is excluded via `ignore`, which takes it out of scope completely).
 
@@ -94,4 +94,4 @@ In advisory mode, treat the PostToolUse `additionalContext` finding the same way
 
 ## Audit awareness
 
-`/tokenize:audit` reports tagged with `semantics-unchecked` and `deprecation-unchecked` mean the audit only verified that literal-replacement happened — it did not verify that the *right* token was used. A token may be syntactically present but semantically wrong (e.g. `color.text.danger` used for an info banner). A passing audit proves no hardcoded literals remain on changed lines; it does not prove the chosen tokens are semantically correct. Run `/tokenize:review` to dispatch the `token-reviewer` subagent for semantic verification, or have a human reviewer apply the same judgment.
+`/ui-tokenize:audit` reports tagged with `semantics-unchecked` and `deprecation-unchecked` mean the audit only verified that literal-replacement happened — it did not verify that the *right* token was used. A token may be syntactically present but semantically wrong (e.g. `color.text.danger` used for an info banner). A passing audit proves no hardcoded literals remain on changed lines; it does not prove the chosen tokens are semantically correct. Run `/ui-tokenize:review` to dispatch the `token-reviewer` subagent for semantic verification, or have a human reviewer apply the same judgment.

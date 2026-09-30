@@ -94,7 +94,7 @@ If observed usages are inconsistent (e.g. some files use `tokens.X` and others u
 
 ## R-06 — `tokenize__propose` as MCP tool, not slash-command-only
 
-**Before:** `/tokenize:propose <value> "<intent>"` was a slash command; assumed agent would self-invoke.
+**Before:** `/ui-tokenize:propose <value> "<intent>"` was a slash command; assumed agent would self-invoke.
 
 **After:** Plugin ships an MCP server (stdio) exposing first-class tools the agent can call without going through the user. Slash command becomes a thin user-facing wrapper.
 
@@ -162,9 +162,9 @@ For AST in v0.2+, the plan is to add `oxc-parser` (Rust core, prebuilt binaries 
 
 ## R-10 — Audit ships unchecked-labels in v1
 
-**Before:** `/tokenize:audit` reports a coverage metric. Semantic review and deprecation tracking deferred to v0.2.
+**Before:** `/ui-tokenize:audit` reports a coverage metric. Semantic review and deprecation tracking deferred to v0.2.
 
-**After:** Audit output always carries explicit `semantics-unchecked` and `deprecation-unchecked` labels per finding. Coverage report includes a top-level disclaimer: *"Token coverage measures literal-replacement only. Tokens may be semantically wrong or deprecated; see `tokenize__deprecate` to manage lifecycle. Run a human or LLM review for semantic correctness."* `/tokenize:audit --fail-on-deprecated` flag added.
+**After:** Audit output always carries explicit `semantics-unchecked` and `deprecation-unchecked` labels per finding. Coverage report includes a top-level disclaimer: *"Token coverage measures literal-replacement only. Tokens may be semantically wrong or deprecated; see `tokenize__deprecate` to manage lifecycle. Run a human or LLM review for semantic correctness."* `/ui-tokenize:audit --fail-on-deprecated` flag added.
 
 **Why:** Without these labels teams over-trust the audit and assume "tokenized = correct." Codex critique #9.
 
@@ -174,9 +174,9 @@ For AST in v0.2+, the plan is to add `oxc-parser` (Rust core, prebuilt binaries 
 
 ## R-11 — CI gate: changed-lines, not repo-wide coverage
 
-**Before:** `/tokenize:audit` exits non-zero on any violation; coverage is the gate metric (FR-AUDIT-3).
+**Before:** `/ui-tokenize:audit` exits non-zero on any violation; coverage is the gate metric (FR-AUDIT-3).
 
-**After:** Default CI behavior is `--changed-only` against `--baseline <ref>` (defaults to `origin/main` or `main`). Gate on **no new violations on changed lines**, not absolute coverage. Coverage remains as a trend metric, surfaced in `/tokenize:metrics` and the audit report header. New flags:
+**After:** Default CI behavior is `--changed-only` against `--baseline <ref>` (defaults to `origin/main` or `main`). Gate on **no new violations on changed lines**, not absolute coverage. Coverage remains as a trend metric, surfaced in `/ui-tokenize:metrics` and the audit report header. New flags:
 
 | Flag | Behavior |
 |---|---|
@@ -236,7 +236,7 @@ Three new failure modes added to `02-spec.md` §8 failure-mode table:
 |---|---|
 | **MultiEdit edits `tokens.json` + consumer file in same call** | PreToolUse processes edits in dependency order: token-source edits first → re-discover catalog → validate consumer edits against the **new** catalog. If a maintainer-mode `tokenize__add_token` is used to add the token, the consumer edit using that name passes. |
 | **Monorepo with multiple token roots** | Catalog scoped to nearest ancestor directory containing a token source (`tokens.json`, `tailwind.config.*`, etc.). Each scope has its own `.tokenize/` dir. Discovery walks up from the file being edited, stops at first matching root. |
-| **Concurrent hook invocations writing the ledger** | Ledger uses per-PID append-only NDJSON log file (`.tokenize/ledger/<pid>.ndjson`); compaction to canonical `session.json` happens at SessionStart and at `/tokenize:metrics`. No file locks; conflict-free by construction. |
+| **Concurrent hook invocations writing the ledger** | Ledger uses per-PID append-only NDJSON log file (`.tokenize/ledger/<pid>.ndjson`); compaction to canonical `session.json` happens at SessionStart and at `/ui-tokenize:metrics`. No file locks; conflict-free by construction. |
 
 **Why:** Codex critique #11. These failures occur in real projects; ignoring them ships a tool that breaks under load.
 

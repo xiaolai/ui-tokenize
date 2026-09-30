@@ -175,7 +175,7 @@ Reason: CSS / JSX / TSX / Vue / Svelte / Astro all need AST parsing. TS-side AST
 
 **Acceptance criteria covered:** AC-5, AC-6, AC-7.
 
-**Test additions:** `/tokenize:init` in empty dir produces expected files. `/tokenize:init --starter shadcn` populates from starter. `/tokenize:propose` emits valid temp name; subsequent edit using temp name passes PreToolUse.
+**Test additions:** `/ui-tokenize:init` in empty dir produces expected files. `/ui-tokenize:init --starter shadcn` populates from starter. `/ui-tokenize:propose` emits valid temp name; subsequent edit using temp name passes PreToolUse.
 
 ---
 
@@ -193,7 +193,7 @@ Reason: CSS / JSX / TSX / Vue / Svelte / Astro all need AST parsing. TS-side AST
 
 **Acceptance criteria covered:** AC-8, AC-11 (perf bench at scale), AC-14.
 
-**Test additions:** `/tokenize:audit` on a fixture with N known violations reports exactly N. `/tokenize:fix` on same fixture resolves them. Bench `audit` on 10k-file fixture meets NFR-PERF-4.
+**Test additions:** `/ui-tokenize:audit` on a fixture with N known violations reports exactly N. `/ui-tokenize:fix` on same fixture resolves them. Bench `audit` on 10k-file fixture meets NFR-PERF-4.
 
 ---
 

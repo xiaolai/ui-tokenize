@@ -7,7 +7,7 @@ User-facing wrapper around the `tokenize__propose` MCP tool. Append the value + 
 
 ## Steps
 
-1. **Validate arguments.** If `$ARGUMENTS` is empty or missing the intent string, stop and tell the user the required form: `/tokenize:propose <value> "<intent>"`. Do not run the CLI.
+1. **Validate arguments.** If `$ARGUMENTS` is empty or missing the intent string, stop and tell the user the required form: `/ui-tokenize:propose <value> "<intent>"`. Do not run the CLI.
 2. **Run the proposer.**
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/commands/cli.mjs" propose $ARGUMENTS

@@ -182,7 +182,7 @@ function handleToolsCall(req) {
 
 function listTokens({ category }) {
   const cat = ensureCatalog();
-  if (!cat) return textContent('No tokens discovered. Run /tokenize:init to scaffold or define tokens first.');
+  if (!cat) return textContent('No tokens discovered. Run /ui-tokenize:init to scaffold or define tokens first.');
   const items = Object.values(cat.tokens)
     .filter((t) => t.tier !== 'primitive' && !t.deprecated)
     .filter((t) => !category || t.type === category)

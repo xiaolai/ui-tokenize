@@ -69,7 +69,7 @@ async function cmdInit(rest) {
     if (cat.conflicts.length > 0) {
       log(`⚠ ${cat.conflicts.length} conflict(s) — see ${join(tokenizeDir(root), 'conflicts.json')}`);
     }
-    log(`Use /tokenize:catalog to inspect, /tokenize:audit to scan for hardcoded values.`);
+    log(`Use /ui-tokenize:catalog to inspect, /ui-tokenize:audit to scan for hardcoded values.`);
     if (!existsSync(configPath)) bootstrapConfig(configPath);
     return;
   }
@@ -97,7 +97,7 @@ async function cmdInit(rest) {
   log(`✓ Generated ${relative(root, cssPath)} and ${relative(root, tsPath)}.`);
   if (!existsSync(configPath)) bootstrapConfig(configPath);
   log('');
-  log(`Next: /tokenize:catalog to verify; /tokenize:audit to find hardcoded values to migrate.`);
+  log(`Next: /ui-tokenize:catalog to verify; /ui-tokenize:audit to find hardcoded values to migrate.`);
 }
 
 function bootstrapConfig(path) {
@@ -147,7 +147,7 @@ async function cmdCatalog(rest) {
   const root = findTokenRoot(process.cwd()) || findRepoRoot(process.cwd()) || process.cwd();
   const cat = readCatalog(root) || discoverCatalog(root);
   if (Object.keys(cat.tokens).length === 0) {
-    log('No tokens. Run /tokenize:init.');
+    log('No tokens. Run /ui-tokenize:init.');
     return;
   }
   /** @type {Record<string, any[]>} */
@@ -570,7 +570,7 @@ async function cmdPropose(rest) {
   const value = rest[0];
   const intent = rest.slice(1).join(' ');
   if (!value || !intent) {
-    log('Usage: /tokenize:propose <value> "<intent>"');
+    log('Usage: /ui-tokenize:propose <value> "<intent>"');
     process.exit(2);
   }
   const root = findTokenRoot(process.cwd()) || findRepoRoot(process.cwd()) || process.cwd();
@@ -636,7 +636,7 @@ async function cmdReviewPrep(rest) {
   const root = findTokenRoot(process.cwd()) || findRepoRoot(process.cwd()) || process.cwd();
   const cat = readCatalog(root) || discoverCatalog(root);
   if (!cat || Object.keys(cat.tokens || {}).length === 0) {
-    process.stderr.write('No catalog. Run /tokenize:init first.\n');
+    process.stderr.write('No catalog. Run /ui-tokenize:init first.\n');
     process.exit(2);
   }
 

@@ -347,7 +347,7 @@ function denyNoCatalog() {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: `[ui-tokenize] This write introduces hardcoded UI value(s), but no design tokens are defined yet — so none can be suggested.\n\nSeed a catalog with /tokenize:init --starter shadcn|material (curated set) or /tokenize:init (discover an existing token source). For a single value you want to keep and tokenize right now, call MCP tool tokenize__propose(value, intent) and use the temporary __proposed.* name it returns.\n\nOnly writes that contain hardcoded UI values are blocked; files with no such literals pass through untouched. Set "strictness": "advisory" in .tokenize/config.json to let these land and surface as non-blocking PostToolUse findings instead.`,
+      permissionDecisionReason: `[ui-tokenize] This write introduces hardcoded UI value(s), but no design tokens are defined yet — so none can be suggested.\n\nSeed a catalog with /ui-tokenize:init --starter shadcn|material (curated set) or /ui-tokenize:init (discover an existing token source). For a single value you want to keep and tokenize right now, call MCP tool tokenize__propose(value, intent) and use the temporary __proposed.* name it returns.\n\nOnly writes that contain hardcoded UI values are blocked; files with no such literals pass through untouched. Set "strictness": "advisory" in .tokenize/config.json to let these land and surface as non-blocking PostToolUse findings instead.`,
     },
   };
 }

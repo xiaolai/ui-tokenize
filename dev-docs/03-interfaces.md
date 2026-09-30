@@ -240,7 +240,7 @@ Resolution rule: precedence DTCG JSON > scanned CSS variables > theme objects > 
 }
 ```
 
-Surfaces in `/tokenize:audit` and `/tokenize:metrics` for human review.
+Surfaces in `/ui-tokenize:audit` and `/ui-tokenize:metrics` for human review.
 
 ---
 
@@ -263,7 +263,7 @@ Confidence:  1.0 (exact match)
 Replacement: padding: tokens.space[4]
 Surface:     tsx-inline-style
 Retry:       attempt 1 of 3
-Escape:      if no token fits → /tokenize:propose 16 "<intent>"
+Escape:      if no token fits → /ui-tokenize:propose 16 "<intent>"
 ```
 
 ### 3.2 Field reference
@@ -296,7 +296,7 @@ Emitted to **stdout** by SessionStart. Goes into agent context.
 # ui-tokenize — design-token catalog (live, generated 2026-04-27T09:30:00Z)
 # Source: tokens.json (87) + scanned :root blocks (12)
 # Use these tokens; never emit hardcoded UI values.
-# When no token fits: /tokenize:propose <value> "<intent>"
+# When no token fits: /ui-tokenize:propose <value> "<intent>"
 
 ## color.text
 - color.text.primary       #0b0f17  (default body text)
@@ -324,7 +324,7 @@ Emitted to **stdout** by SessionStart. Goes into agent context.
 # - "color.brand.main" — actual: color.brand.primary
 ```
 
-**Sizing:** if catalog exceeds 4000 chars, group by category and inject only categories used in this project's source files (determined by greedy match in `lib/discover`). Detail-on-demand via `/tokenize:catalog`.
+**Sizing:** if catalog exceeds 4000 chars, group by category and inject only categories used in this project's source files (determined by greedy match in `lib/discover`). Detail-on-demand via `/ui-tokenize:catalog`.
 
 **Mid-session catalog updates** (PostToolUse on token-source file): emit a tool-result containing only the **delta**:
 
@@ -341,12 +341,12 @@ Renamed: color.brand.main → color.brand.primary
 
 | Command | Args | Behavior | Output |
 |---|---|---|---|
-| `/tokenize:init` | `[--starter <name>]` | Detect or scaffold tokens; generate `tokens.css` + `tokens.ts` | Discovery report + scaffolded files |
-| `/tokenize:audit` | `[--json | --markdown]` `[--fix]` | Full-repo scan; coverage metric | Violation report; non-zero exit on violations |
-| `/tokenize:fix` | `[<glob>]` | Apply suggested replacements in-place | List of modified files + replacements applied |
-| `/tokenize:propose` | `<value>` `"<intent>"` | Append to `tokens.proposed.json`; return temp token name | Temp token name |
-| `/tokenize:catalog` | `[<pattern>]` | Print canonical catalog | Categorized list |
-| `/tokenize:metrics` | (none) | Print session ledger | Metrics table |
+| `/ui-tokenize:init` | `[--starter <name>]` | Detect or scaffold tokens; generate `tokens.css` + `tokens.ts` | Discovery report + scaffolded files |
+| `/ui-tokenize:audit` | `[--json | --markdown]` `[--fix]` | Full-repo scan; coverage metric | Violation report; non-zero exit on violations |
+| `/ui-tokenize:fix` | `[<glob>]` | Apply suggested replacements in-place | List of modified files + replacements applied |
+| `/ui-tokenize:propose` | `<value>` `"<intent>"` | Append to `tokens.proposed.json`; return temp token name | Temp token name |
+| `/ui-tokenize:catalog` | `[<pattern>]` | Print canonical catalog | Categorized list |
+| `/ui-tokenize:metrics` | (none) | Print session ledger | Metrics table |
 
 **Starter names** (FR-INIT-3): `shadcn`, `material`, `polaris`, `primer`. Each ships a curated DTCG `tokens.json` for that design system's semantic layer.
 

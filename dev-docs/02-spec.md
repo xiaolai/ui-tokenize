@@ -44,7 +44,7 @@ Related: `01-research.md` (problem analysis), `03-interfaces.md` (wire formats),
 | **Violation** | A literal UI value (hex / rgb / px / inline style number / Tailwind arbitrary bracket) emitted in a non-token source |
 | **Block** | A PreToolUse hook return that prevents a `Write`/`Edit`/`MultiEdit` from completing |
 | **Suggestion** | A surface-rendered token reference proposed in place of a violation |
-| **Escape valve** | The `/tokenize:propose` flow used when no existing token fits |
+| **Escape valve** | The `/ui-tokenize:propose` flow used when no existing token fits |
 | **Ledger** | `.tokenize/session.json` — persistent state for retry budgets and metrics |
 
 ## 4. System overview
@@ -146,15 +146,15 @@ Library boundaries: `discover`, `scanner`, `suggester`, `render`, `ledger`, `cat
 
 | ID | Requirement |
 |---|---|
-| FR-PROPOSE-1 | `/tokenize:propose <value> "<intent>"` appends to `tokens.proposed.json` and returns a temp token name |
+| FR-PROPOSE-1 | `/ui-tokenize:propose <value> "<intent>"` appends to `tokens.proposed.json` and returns a temp token name |
 | FR-PROPOSE-2 | Temp tokens (matching `__proposed.*`) bypass PreToolUse blocks |
-| FR-PROPOSE-3 | `/tokenize:audit` surfaces pending proposals for human review |
+| FR-PROPOSE-3 | `/ui-tokenize:audit` surfaces pending proposals for human review |
 
 ### FR-INIT: Project bootstrap
 
 | ID | Requirement |
 |---|---|
-| FR-INIT-1 | `/tokenize:init` detects existing token sources and produces a discovery report |
+| FR-INIT-1 | `/ui-tokenize:init` detects existing token sources and produces a discovery report |
 | FR-INIT-2 | If no token source exists, scaffold an empty DTCG `tokens.json` with JSON schema reference |
 | FR-INIT-3 | `--starter <name>` flag opt-in pulls a curated starter set (e.g. `shadcn`, `material`) |
 | FR-INIT-4 | Generate `tokens.css` (CSS custom properties) and `tokens.ts` (typed export) from `tokens.json` |
@@ -165,7 +165,7 @@ Library boundaries: `discover`, `scanner`, `suggester`, `render`, `ledger`, `cat
 
 | ID | Requirement |
 |---|---|
-| FR-AUDIT-1 | `/tokenize:audit` scans all matching files; produces violation report and token-coverage metric |
+| FR-AUDIT-1 | `/ui-tokenize:audit` scans all matching files; produces violation report and token-coverage metric |
 | FR-AUDIT-2 | Coverage = (styled declarations using tokens) / (total styled declarations); computed per category and overall |
 | FR-AUDIT-3 | Exit with non-zero code on violations; CI-friendly |
 | FR-AUDIT-4 | Output formats: human (default), `--json`, `--markdown` |
@@ -174,9 +174,9 @@ Library boundaries: `discover`, `scanner`, `suggester`, `render`, `ledger`, `cat
 
 | ID | Requirement |
 |---|---|
-| FR-OBS-1 | `/tokenize:metrics` prints session ledger: violations, blocks, retries, escalations, fabrications, coverage delta |
+| FR-OBS-1 | `/ui-tokenize:metrics` prints session ledger: violations, blocks, retries, escalations, fabrications, coverage delta |
 | FR-OBS-2 | Metrics persisted to `.tokenize/session.json`; aggregable across sessions |
-| FR-OBS-3 | `/tokenize:catalog [pattern]` prints the canonical catalog grouped by category |
+| FR-OBS-3 | `/ui-tokenize:catalog [pattern]` prints the canonical catalog grouped by category |
 
 ## 6. Non-functional requirements
 
@@ -232,7 +232,7 @@ Four nested control loops at increasing time scales. Detailed wire formats and b
 
 ```
 attempt 1   →  hard block + suggestion
-attempt 2   →  hard block + suggestion + "you retried similarly; try the exact replacement or /tokenize:propose"
+attempt 2   →  hard block + suggestion + "you retried similarly; try the exact replacement or /ui-tokenize:propose"
 attempt 3   →  hard block + force-escalate message
 attempt 4+  →  soft-allow + escalation log entry + high-priority PostToolUse warning
 ```
@@ -245,14 +245,14 @@ Budget keyed by `(file_path, line_range, literal_value)`.
 |---|---|
 | Session start | Full re-discovery; full L0 injection |
 | Token-source file written | Re-discover; emit `"Catalog updated"` tool-result with delta |
-| `/tokenize:catalog` invoked | Read `.tokenize/catalog.json`; print |
+| `/ui-tokenize:catalog` invoked | Read `.tokenize/catalog.json`; print |
 | Per-PreToolUse | No re-discovery; in-memory cache only |
 
 ### Failure-mode handling
 
 | Failure | Behavior |
 |---|---|
-| Catalog empty | Block with explicit "no tokens defined yet — run `/tokenize:init` or `/tokenize:propose` for each value" |
+| Catalog empty | Block with explicit "no tokens defined yet — run `/ui-tokenize:init` or `/ui-tokenize:propose` for each value" |
 | Catalog malformed | Degrade to last-known-good `.tokenize/catalog.json`; log to `.tokenize/conflicts.json` |
 | Token name fabrication | PreToolUse validates token references against catalog; blocks unknown names with "did you mean: …?" |
 | Adversarial obfuscation (`8 + 8`, `'#' + 'fff'`) | AST pass evaluates constant expressions; flags string concatenation in style contexts |
@@ -270,10 +270,10 @@ The plugin is acceptance-complete for v1 when:
 | AC-2 | The same agent's retry using `tokens.space[4]` succeeds without further block |
 | AC-3 | Three consecutive hard-blocks on the same `(file, region, literal)` produce a soft-allow + escalation log entry on attempt 4 |
 | AC-4 | Modifying `tokens.json` mid-session triggers a `"Catalog updated"` tool-result containing the delta |
-| AC-5 | An agent invoking `/tokenize:propose "#fb923c" "warning-bg"` receives a `__proposed.*` token name; subsequent `Write` using that name is not blocked |
-| AC-6 | `/tokenize:init` in an empty directory produces `tokens.json` (empty DTCG), `tokens.css`, and `tokens.ts` |
-| AC-7 | `/tokenize:init --starter shadcn` produces a populated DTCG token set |
-| AC-8 | `/tokenize:audit` on the fixture project produces a violation report with non-zero exit on violations |
+| AC-5 | An agent invoking `/ui-tokenize:propose "#fb923c" "warning-bg"` receives a `__proposed.*` token name; subsequent `Write` using that name is not blocked |
+| AC-6 | `/ui-tokenize:init` in an empty directory produces `tokens.json` (empty DTCG), `tokens.css`, and `tokens.ts` |
+| AC-7 | `/ui-tokenize:init --starter shadcn` produces a populated DTCG token set |
+| AC-8 | `/ui-tokenize:audit` on the fixture project produces a violation report with non-zero exit on violations |
 | AC-9 | Plugin works in a project with no Stylelint, no ESLint, no Style Dictionary, no Tailwind |
 | AC-10 | Plugin augments (does not duplicate) Stylelint when Stylelint is present |
 | AC-11 | All performance budgets in NFR-PERF-* met on the bench harness |

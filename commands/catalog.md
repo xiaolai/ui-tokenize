@@ -22,4 +22,4 @@ One section per token type (color, dimension, radius, shadow, duration, other), 
   <token.name>                           <value>[ [primitive]][ [DEPRECATED]]
 ```
 
-Tokens are alphabetically sorted within their type. If `<filter-pattern>` is passed, only token names containing that substring appear. If the catalog is empty, the CLI prints `No tokens. Run /tokenize:init.` — surface that line directly.
+Tokens are alphabetically sorted within their type. If `<filter-pattern>` is passed, only token names containing that substring appear. If the catalog is empty, the CLI prints `No tokens. Run /ui-tokenize:init.` — surface that line directly.

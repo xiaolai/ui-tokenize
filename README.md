@@ -37,13 +37,13 @@ claude plugin install ui-tokenize@xiaolai --scope project
 In a project with existing tokens (DTCG `tokens.json`, CSS `:root` vars, SCSS / LESS / TS / Tailwind / CSS-in-JS):
 
 ```
-/tokenize:init
+/ui-tokenize:init
 ```
 
 In a project with no tokens yet:
 
 ```
-/tokenize:init --starter shadcn
+/ui-tokenize:init --starter shadcn
 ```
 
 ### Use
@@ -52,12 +52,12 @@ After `init`, every `Write`/`Edit`/`MultiEdit` from any agent in this project is
 
 | Command                                                                      | Purpose                                                                                  |
 | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `/tokenize:catalog [pattern]`                                                | Print the live token catalog                                                             |
-| `/tokenize:audit [--changed-only\|--full-repo] [--baseline <ref>] [--json]`  | Scan for hardcoded values; default gates on changed lines vs baseline                    |
-| `/tokenize:review [--changed-only\|--full-repo] [--baseline <ref>]`          | Semantic review: dispatch the `token-reviewer` agent to flag mis-picked tokens           |
-| `/tokenize:fix [<path>]`                                                     | Apply exact-match rewrites in place                                                      |
-| `/tokenize:propose <value> "<intent>"`                                       | Queue a new token proposal                                                               |
-| `/tokenize:metrics`                                                          | Session ledger: blocks, rewrites, fabrications, escalations                              |
+| `/ui-tokenize:catalog [pattern]`                                                | Print the live token catalog                                                             |
+| `/ui-tokenize:audit [--changed-only\|--full-repo] [--baseline <ref>] [--json]`  | Scan for hardcoded values; default gates on changed lines vs baseline                    |
+| `/ui-tokenize:review [--changed-only\|--full-repo] [--baseline <ref>]`          | Semantic review: dispatch the `token-reviewer` agent to flag mis-picked tokens           |
+| `/ui-tokenize:fix [<path>]`                                                     | Apply exact-match rewrites in place                                                      |
+| `/ui-tokenize:propose <value> "<intent>"`                                       | Queue a new token proposal                                                               |
+| `/ui-tokenize:metrics`                                                          | Session ledger: blocks, rewrites, fabrications, escalations                              |
 
 ### Modes
 
@@ -106,19 +106,19 @@ When in doubt, leave it unset — the default catches violations across the full
 
 ### Semantic review
 
-`/tokenize:audit` confirms that hardcoded literals were replaced by tokens. It does **not** confirm that the *right* token was chosen. The canonical mis-pick: `color.text.danger` used in a component called `InfoBanner` — the literal got tokenized, but the token's *meaning* contradicts the context.
+`/ui-tokenize:audit` confirms that hardcoded literals were replaced by tokens. It does **not** confirm that the *right* token was chosen. The canonical mis-pick: `color.text.danger` used in a component called `InfoBanner` — the literal got tokenized, but the token's *meaning* contradicts the context.
 
-`/tokenize:review` dispatches the `token-reviewer` subagent to apply that semantic judgment:
+`/ui-tokenize:review` dispatches the `token-reviewer` subagent to apply that semantic judgment:
 
 ```
-/tokenize:review                                # changed-only vs origin/main
-/tokenize:review --full-repo                    # everything
-/tokenize:review --baseline main                # against a specific ref
+/ui-tokenize:review                                # changed-only vs origin/main
+/ui-tokenize:review --full-repo                    # everything
+/ui-tokenize:review --baseline main                # against a specific ref
 ```
 
 The deterministic half is `cli.mjs review-prep`, which finds catalog-resolved token usages with surrounding context and emits structured JSON. The agent reads that JSON and classifies each usage as `correct`, `mis-pick`, or `unclear`, citing the specific context line that triggered each verdict. The agent does not modify files — it produces a Markdown report; you (or a human reviewer) apply the fixes.
 
-Pair `/tokenize:audit` with `/tokenize:review` for full coverage: audit catches missing tokenization deterministically, review catches semantic mis-picks via LLM judgment.
+Pair `/ui-tokenize:audit` with `/ui-tokenize:review` for full coverage: audit catches missing tokenization deterministically, review catches semantic mis-picks via LLM judgment.
 
 ### Verify
 
@@ -130,7 +130,7 @@ Currently 161 / 161 passing.
 
 ## Status
 
-v0.4.0 — pre-release. Regex-based scanners cover CSS, SCSS, LESS, JSX inline styles, Tailwind arbitrary brackets, SVG color attrs, and styled-components / emotion / vanilla-extract template literals (best-effort). `strictness: advisory`, per-project `surfaces` allowlist, and the `token-reviewer` semantic-review subagent (`/tokenize:review`) supported. Full AST coverage and daemon-mode latency follow in a later milestone.
+v0.4.0 — pre-release. Regex-based scanners cover CSS, SCSS, LESS, JSX inline styles, Tailwind arbitrary brackets, SVG color attrs, and styled-components / emotion / vanilla-extract template literals (best-effort). `strictness: advisory`, per-project `surfaces` allowlist, and the `token-reviewer` semantic-review subagent (`/ui-tokenize:review`) supported. Full AST coverage and daemon-mode latency follow in a later milestone.
 
 See `dev-docs/` for spec, interfaces, decisions log, and audit history.
 

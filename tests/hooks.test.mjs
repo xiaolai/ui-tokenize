@@ -396,7 +396,7 @@ test('PreToolUse: tokens.json source still denies direct Write in maintainer mod
 // Empty / absent catalog (regression: blanket-deny blocked all writes)
 // --------------------------------------------------------------------------------
 //
-// `/tokenize:init` without a starter scaffolds `{ "$schema": ... }` — zero tokens.
+// `/ui-tokenize:init` without a starter scaffolds `{ "$schema": ... }` — zero tokens.
 // The old hook denied *every* non-exempt write in that state (before scanning), which
 // blocked docs, JSON, and prose that contained nothing to tokenize. The catalog being
 // empty must only matter for writes that actually introduce hardcoded UI literals.
@@ -404,7 +404,7 @@ test('PreToolUse: tokens.json source still denies direct Write in maintainer mod
 function setupEmptyCatalogProject({ strictness } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ui-tokenize-empty-'));
   writeFileSync(join(root, 'package.json'), '{"name":"empty-sample"}');
-  // Exactly what `/tokenize:init` scaffolds without a starter: schema only, no tokens.
+  // Exactly what `/ui-tokenize:init` scaffolds without a starter: schema only, no tokens.
   writeFileSync(join(root, 'tokens.json'), JSON.stringify({
     $schema: 'https://design-tokens.github.io/community-group/schemas/format/',
   }));
