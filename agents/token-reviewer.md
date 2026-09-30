@@ -1,7 +1,7 @@
 ---
 name: token-reviewer
 description: |
-  Use this agent when the user asks "is this token semantically correct", "is this token the right one", "review my token usages", "check if I'm using the right token", "audit token semantics", "find semantic mis-picks", or after a `/ui-tokenize:audit` run when they want to verify that tokenized literals were replaced with the *right* token (not just *a* token). This is the semantic-review counterpart to the deterministic audit — audit checks that no hardcoded literals remain; this agent checks that the chosen tokens fit their context. Examples:
+  Use this agent when the user asks "is this token semantically correct", "is this token the right one", "review my token usages", "check if I'm using the right token", "audit token semantics", "find semantic mis-picks", wants a suspected mis-pick double-checked, wants a full-repo semantic review (--full-repo), or after a `/ui-tokenize:audit` run to verify literals were replaced with the *right* token, not just *a* token. Not for finding hardcoded literals; that is the deterministic `/ui-tokenize:audit`.
 
   <example>
   Context: User just ran the audit and it returned 0 findings, but they want to verify token choices are semantically correct.
@@ -9,24 +9,6 @@ description: |
   assistant: "I'll use the token-reviewer agent to review every token usage in your changed lines and flag any that look semantically off."
   <commentary>
   Audit confirms literal-replacement happened; only an LLM can judge whether `color.text.danger` is right for an info banner. The token-reviewer agent reads each usage with surrounding context and applies that judgment.
-  </commentary>
-  </example>
-
-  <example>
-  Context: User suspects a teammate misused a token in a PR.
-  user: "Banner.tsx is using color.text.danger but the component is for informational messages — can you double-check?"
-  assistant: "I'll dispatch the token-reviewer to scan token usages and surface that mis-pick along with any others."
-  <commentary>
-  Mis-pick focus — the user has a hypothesis and wants verification across the file or change-set, not just a single hand-checked instance.
-  </commentary>
-  </example>
-
-  <example>
-  Context: User wants a semantic review across the whole repo, not just changed lines.
-  user: "Do a full semantic review of every token usage in the project"
-  assistant: "I'll run the token-reviewer with --full-repo so every usage is inspected, not just changed lines."
-  <commentary>
-  Full-repo focus — slower, useful for periodic audits or onboarding to a new codebase.
   </commentary>
   </example>
 model: sonnet
