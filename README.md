@@ -141,3 +141,13 @@ Part of the [xiaolai plugin marketplace](https://github.com/xiaolai/claude-plugi
 ## License
 
 [ISC License](LICENSE) — free to use, copy, modify, and distribute.
+
+## Choosing enforcement
+
+Start sparse catalogs in advisory mode and measure incorrect denials before opting into strict mode.
+Equal numeric values do not establish equal design meaning: when multiple tokens share a value,
+review their semantic names and intended use. Hooks cover the named edit tools, not arbitrary shell
+writes; run the audit in CI to check changes from every path. Behavioral fixtures should include
+ambiguous token aliases, deliberate exceptions, and edits made outside Write/Edit.
+
+Equal-valued token aliases now require an explicit semantic choice: the suggester returns candidates without an automatic replacement. Strict mode asks for a choice; advisory mode leaves the literal untouched.

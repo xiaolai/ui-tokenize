@@ -64,3 +64,10 @@ test('suggest: dimension out of tolerance', () => {
   const r = suggest(makeViolation('100px', 'dimension'), CATALOG);
   assert.equal(r.primary, null);
 });
+
+test('equal-valued semantic aliases require a choice rather than a silent rewrite', () => {
+ const catalog = {valueIndex: {color: [{value: '#ffffff', tokenNames: ['color.text.inverse','color.surface.canvas']}]}};
+ const result = suggest({type:'color',literal:'#fff',surface:'css'}, catalog);
+ assert.equal(result.primary, null);
+ assert.equal(result.alternates.length, 2);
+});
